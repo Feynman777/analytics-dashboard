@@ -4,6 +4,7 @@ import psycopg2
 from datetime import datetime, timezone
 from decimal import Decimal
 from io import StringIO
+import altair as alt
 
 
 DB_HOST = st.secrets["database"]["DB_HOST"]
@@ -76,7 +77,7 @@ def get_user_daily_volume(username):
 
 # === Streamlit UI ===
 st.set_page_config(page_title="User Volume Viewer", layout="centered")
-st.title("📊 User Volume Dashboard")
+st.title("📊 Newmoney.AI Analytics Dashboard")
 
 # Input for multiple usernames
 usernames = st.text_input("Enter up to 5 usernames (comma separated):")
@@ -113,14 +114,41 @@ if usernames:
     if all_df_day.empty:
         st.warning("No data found for provided usernames and date range.")
     else:
-        # === Daily Volume Chart ===
-        st.subheader("📈 Daily Volume (USD)")
-        chart_df = all_df_day.pivot(index="date", columns="username", values="daily_volume_usd")
-        st.line_chart(chart_df)
+        # === Daily Volume Chart (Altair) ===
+        all_df_day["date"] = pd.to_datetime(all_df_day["date"])
+        all_df_day["daily_volume_usd"] = all_df_day["daily_volume_usd"].astype(float)
 
-        # === Optional Detail View ===
+        daily_chart = alt.Chart(all_df_day).mark_line(point=True).encode(
+            x=alt.X("date:T", title="Date"),
+            y=alt.Y("daily_volume_usd:Q", title="Volume (USD)", scale=alt.Scale(zero=False)),
+            color=alt.Color("username:N", title="User"),
+            tooltip=["date:T", "username:N", alt.Tooltip("daily_volume_usd:Q", format=".2f")]
+        ).properties(
+            width=700,
+            height=400,
+            title="📈 Daily Volume (USD)"
+        ).interactive()
+
+        st.altair_chart(daily_chart, use_container_width=True)
+
+        # === Optional Detail View with Altair ===
         if not df_ts_first.empty:
             if st.toggle("Show transaction-level detail for first user"):
-                st.subheader(f"🕒 Transaction Detail for {username_list[0]}")
-                st.line_chart(df_ts_first.set_index("datetime")["volume_usd"])
+                df_ts_first["datetime"] = pd.to_datetime(df_ts_first["datetime"])
+                df_ts_first["volume_usd"] = df_ts_first["volume_usd"].astype(float)
+
+                detail_chart = alt.Chart(df_ts_first).mark_line(point=True).encode(
+                    x=alt.X("datetime:T", title="Date & Time"),
+                    y=alt.Y("volume_usd:Q", title="Volume (USD)", scale=alt.Scale(zero=False)),
+                    tooltip=[
+                        alt.Tooltip("datetime:T"),
+                        alt.Tooltip("volume_usd:Q", format=".2f")
+                    ]
+                ).properties(
+                    width=700,
+                    height=300,
+                    title=f"📈 Daily Volume (USD) for {username_list[0]}"
+                ).interactive()
+
+                st.altair_chart(detail_chart, use_container_width=True)
                 st.dataframe(df_ts_first.style.format({"volume_usd": "{:.2f}"}), use_container_width=True)

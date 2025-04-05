@@ -6,7 +6,6 @@ from decimal import Decimal
 from io import StringIO
 import altair as alt
 
-
 DB_HOST = st.secrets["database"]["DB_HOST"]
 DB_PORT = st.secrets["database"]["DB_PORT"]
 DB_NAME = st.secrets["database"]["DB_NAME"]
@@ -38,9 +37,14 @@ def get_user_daily_volume(username):
             for created_at, txn_raw in rows:
                 try:
                     txn = pd.read_json(StringIO(txn_raw), typ='series')
-                    from_amount = Decimal(txn.get("fromAmount", 0))
-                    decimals = int(txn.get("fromToken", {}).get("decimals", 18))
-                    price_usd = Decimal(txn.get("fromToken", {}).get("tokenPrices", {}).get("usd", 0))
+
+                    try:
+                        from_amount = Decimal(txn.get("fromAmount", 0))
+                        decimals = int(txn.get("fromToken", {}).get("decimals", 18))
+                        price_usd = Decimal(txn.get("fromToken", {}).get("tokenPrices", {}).get("usd", 0))
+                    except (ValueError, OverflowError, ArithmeticError, Exception) as e:
+                        print(f"Skipping txn for user {username} on {created_at}: {e}")
+                        continue
 
                     if from_amount and price_usd:
                         normalized = from_amount / Decimal(10 ** decimals)
@@ -82,29 +86,22 @@ st.title("📊 Newmoney.AI Analytics Dashboard")
 # Input for multiple usernames
 usernames = st.text_input("Enter up to 5 usernames (comma separated):")
 
-# Date range selector
-min_date = datetime(2024, 1, 1)
-max_date = datetime.now(timezone.utc)
-date_range = st.date_input("Filter date range:", value=(min_date, max_date))
-
 if usernames:
     username_list = [u.strip() for u in usernames.split(",")][:5]
 
     all_df_day = pd.DataFrame()
     df_ts_first = pd.DataFrame()
+    min_transaction_date = None
 
     with st.spinner("Fetching data for all users..."):
         for i, uname in enumerate(username_list):
             df_day, df_ts = get_user_daily_volume(uname)
 
-            # Filter by date range
             if not df_day.empty:
-                start_date = pd.to_datetime(date_range[0]).date()
-                end_date = pd.to_datetime(date_range[1]).date()
-                df_day = df_day[
-                    (df_day["date"].dt.date >= start_date) &
-                    (df_day["date"].dt.date <= end_date)
-                ]
+                first_date = df_day["date"].min().date()
+                if min_transaction_date is None or first_date < min_transaction_date:
+                    min_transaction_date = first_date
+
                 df_day["username"] = uname
                 all_df_day = pd.concat([all_df_day, df_day], ignore_index=True)
 
@@ -112,8 +109,21 @@ if usernames:
                 df_ts_first = df_ts
 
     if all_df_day.empty:
-        st.warning("No data found for provided usernames and date range.")
+        st.warning("No data found for provided usernames.")
     else:
+        # Set min and max date for filter
+        min_date = min_transaction_date
+        max_date = datetime.now(timezone.utc).date()
+
+        date_range = st.date_input("Filter date range:", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+        start_date, end_date = pd.to_datetime(date_range[0]).date(), pd.to_datetime(date_range[1]).date()
+
+        # Filter again now that we have date range selected
+        all_df_day = all_df_day[
+            (all_df_day["date"].dt.date >= start_date) &
+            (all_df_day["date"].dt.date <= end_date)
+        ]
+
         # === Daily Volume Chart (Altair) ===
         all_df_day["date"] = pd.to_datetime(all_df_day["date"])
         all_df_day["daily_volume_usd"] = all_df_day["daily_volume_usd"].astype(float)

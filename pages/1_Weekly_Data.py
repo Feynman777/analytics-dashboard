@@ -100,11 +100,26 @@ if all_weeks.empty:
     st.warning("No swap data available.")
     st.stop()
 
+# === Filter Range UI (Updated Logic) ===
 min_week = all_weeks["week"].min().date()
 max_week = all_weeks["week"].max().date()
-default_start = max(DEFAULT_START_DATE, min_week)
-date_range = st.date_input("Select start and end:", (default_start, max_week), min_value=min_week, max_value=max_week)
-start_range, end_range = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+hardcoded_default = datetime(2025, 1, 1).date()
+
+# Use the later of hardcoded default and min_week
+default_start = max(hardcoded_default, min_week)
+
+# UI
+date_range = st.date_input(
+    "Select start and end:",
+    (default_start, max_week),
+    min_value=min_week,
+    max_value=max_week
+)
+
+# Apply logic after user selection
+user_selected_start = pd.to_datetime(date_range[0]).date()
+start_range = pd.to_datetime(max(user_selected_start, min_week))
+end_range = pd.to_datetime(date_range[1])
 
 # === CHART + STATS RENDERING ===
 def week_over_week_change(df, col="value"):

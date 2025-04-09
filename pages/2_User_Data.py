@@ -1,27 +1,16 @@
-#pages/2_User_Data.py
+#2_User_Data.py
 import streamlit as st
 import pandas as pd
-import psycopg2
+import altair as alt
 from datetime import datetime, timezone
 from decimal import Decimal
 from io import StringIO
-import altair as alt
-
-DB_HOST = st.secrets["database"]["DB_HOST"]
-DB_PORT = st.secrets["database"]["DB_PORT"]
-DB_NAME = st.secrets["database"]["DB_NAME"]
-DB_USER = st.secrets["database"]["DB_USER"]
-DB_PASS = st.secrets["database"]["DB_PASS"]
+from helpers.connection import get_main_db_connection
+from utils.charts import user_volume_chart, user_txn_detail_chart
 
 def get_user_daily_volume(username):
     try:
-        with psycopg2.connect(
-            host=DB_HOST,
-            port=int(DB_PORT),  # Ensure integer
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS
-        ) as conn:
+        with get_main_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("""
                     SELECT A."createdAt", A.transaction
@@ -73,7 +62,6 @@ def get_user_daily_volume(username):
 st.title("User Data")
 
 usernames = st.text_input("Enter up to 5 usernames (comma separated):")
-
 if usernames:
     username_list = [u.strip() for u in usernames.split(",")][:5]
     all_df_day = pd.DataFrame()
@@ -97,45 +85,15 @@ if usernames:
     else:
         min_date = min_transaction_date
         max_date = datetime.now(timezone.utc).date()
-
         date_range = st.date_input("Filter date range:", value=(min_date, max_date), min_value=min_date, max_value=max_date)
         start_date, end_date = pd.to_datetime(date_range[0]).date(), pd.to_datetime(date_range[1]).date()
 
         all_df_day = all_df_day[
-            (all_df_day["date"].dt.date >= start_date) &
-            (all_df_day["date"].dt.date <= end_date)
+            (all_df_day["date"].dt.date >= start_date) & (all_df_day["date"].dt.date <= end_date)
         ]
+        chart = user_volume_chart(all_df_day)
+        st.altair_chart(chart, use_container_width=True)
 
-        all_df_day["date"] = pd.to_datetime(all_df_day["date"])
-        all_df_day["daily_volume_usd"] = all_df_day["daily_volume_usd"].astype(float)
-
-        daily_chart = alt.Chart(all_df_day).mark_line(point=True).encode(
-            x=alt.X("date:T", title="Date"),
-            y=alt.Y("daily_volume_usd:Q", title="Volume (USD)", scale=alt.Scale(zero=False)),
-            color=alt.Color("username:N", title="User"),
-            tooltip=["date:T", "username:N", alt.Tooltip("daily_volume_usd:Q", format=".2f")]
-        ).properties(
-            width=700,
-            height=400,
-            title="\ud83d\udcc8 Daily Volume (USD)"
-        ).interactive()
-
-        st.altair_chart(daily_chart, use_container_width=True)
-
-        if not df_ts_first.empty:
-            if st.toggle("Show transaction-level detail for first user"):
-                df_ts_first["datetime"] = pd.to_datetime(df_ts_first["datetime"])
-                df_ts_first["volume_usd"] = df_ts_first["volume_usd"].astype(float)
-
-                detail_chart = alt.Chart(df_ts_first).mark_line(point=True).encode(
-                    x=alt.X("datetime:T", title="Date & Time"),
-                    y=alt.Y("volume_usd:Q", title="Volume (USD)", scale=alt.Scale(zero=False)),
-                    tooltip=[alt.Tooltip("datetime:T"), alt.Tooltip("volume_usd:Q", format=".2f")]
-                ).properties(
-                    width=700,
-                    height=300,
-                    title=f"\ud83d\udcc8 Daily Volume (USD) for {username_list[0]}"
-                ).interactive()
-
-                st.altair_chart(detail_chart, use_container_width=True)
-                st.dataframe(df_ts_first.style.format({"volume_usd": "{:.2f}"}), use_container_width=True)
+        if not df_ts_first.empty and st.toggle("Show transaction-level detail for first user"):
+            st.altair_chart(user_txn_detail_chart(df_ts_first, username_list[0]), use_container_width=True)
+            st.dataframe(df_ts_first.style.format({"volume_usd": "{:.2f}"}), use_container_width=True)

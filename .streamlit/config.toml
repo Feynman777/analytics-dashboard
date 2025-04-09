@@ -1,0 +1,9 @@
+[server]
+headless = true
+
+[theme]
+base = "light"
+
+[general]
+page_title = "Newmoney Dashboard"
+mainPage = "Home_Page.py"

@@ -113,14 +113,17 @@ st.subheader("📊 Weekly and Daily Fees")
 col3, col4 = st.columns(2)
 
 with col3:
-    weekly_fees["week_label"] = weekly_fees["week"].dt.strftime("%b %d")  # e.g. Mar 11
-    weekly_chart = alt.Chart(weekly_fees).mark_bar(size=50).encode(
-        x=alt.X("week_label:O", title="Week"),
+    weekly_fees["week_label"] = weekly_fees["week"].dt.strftime("%b %d")
+    weekly_chart = alt.Chart(weekly_fees).mark_bar(size=45).encode(
+        x=alt.X("week_label:N", title="Week", sort=weekly_fees["week_label"].tolist()),
         y=alt.Y("value:Q", title="Total Fees"),
-        tooltip=["week:T", "value:Q"]
+        tooltip=[
+            alt.Tooltip("week:T", title="Week"),
+            alt.Tooltip("value:Q", title="Fees", format=".2f")
+        ]
     ).properties(
         width=500,
-        height=300,
+        height=500,
         title="Weekly Fees"
     )
     st.altair_chart(weekly_chart)
@@ -129,10 +132,13 @@ with col4:
     daily_chart = alt.Chart(daily_fees).mark_bar(size=8).encode(
         x=alt.X("date:T", title="Date", axis=alt.Axis(labelAngle=-45, format="%b %d")),
         y=alt.Y("value:Q", title="Total Fees"),
-        tooltip=["date:T", "value:Q"]
+        tooltip=[
+            alt.Tooltip("date:T", title="Date"),
+            alt.Tooltip("value:Q", title="Fees", format=".2f")
+        ]
     ).properties(
         width=500,
-        height=300,
+        height=500,
         title="Daily Fees"
     )
     st.altair_chart(daily_chart)

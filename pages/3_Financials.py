@@ -96,7 +96,7 @@ filtered_df = df[(df["date"].dt.date >= start_date) & (df["date"].dt.date <= end
 filtered_df["week"] = filtered_df["date"].dt.to_period("W").apply(lambda r: r.start_time)
 filtered_df["month"] = filtered_df["date"].dt.to_period("M").apply(lambda r: r.start_time)
 
-weekly_fees = filtered_df.groupby("week")["value"].sum().reset_index()
+weekly_fees = filtered_df.groupby("week")["value"].sum().reset_index().sort_values("week")
 daily_fees = filtered_df.groupby("date")["value"].sum().reset_index()
 
 # === METRICS ===

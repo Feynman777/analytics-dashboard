@@ -2,9 +2,7 @@
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timezone, timedelta
-import os
-import json
+from datetime import datetime, timezone
 
 from helpers.fetch import (
     fetch_swap_series,
@@ -14,32 +12,13 @@ from helpers.fetch import (
 )
 from helpers.upsert import upsert_chain_timeseries, upsert_timeseries
 from utils.charts import metric_section
+from helpers.sync_utils import sync_section
 
 # === CONFIG ===
 st.set_page_config(page_title="Weekly Data", layout="wide")
 st.title("📊 Newmoney.AI Weekly Data Dashboard")
 
-SYNC_FILE = "last_sync_swap_volume.json"
-DEFAULT_START_DATE = datetime(2015, 1, 1).date()
-
 API_METRICS = ["cash_volume", "new_users", "referrals", "total_agents"]
-
-def get_last_sync():
-    if os.path.exists(SYNC_FILE):
-        with open(SYNC_FILE, "r") as f:
-            data = json.load(f)
-            raw = data.get("last_sync")
-            try:
-                # Try full ISO format with timezone
-                return datetime.fromisoformat(raw)
-            except ValueError:
-                # Fallback to plain date
-                return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    return datetime(2024, 1, 1, tzinfo=timezone.utc)
-
-def update_last_sync(sync_datetime):
-    with open(SYNC_FILE, "w") as f:
-        json.dump({"last_sync": sync_datetime.isoformat()}, f)
 
 # === CHAIN SELECTION ===
 available_chains = ["base", "arbitrum", "ethereum", "polygon", "avalanche", "mode", "bnb", "sui", "solana", "optimism"]
@@ -48,50 +27,25 @@ selected_chains = st.multiselect("Select chains to include:", available_chains, 
 # === EXCLUDE CURRENT WEEK TOGGLE ===
 exclude_current_week = st.toggle("🚫 Exclude current (incomplete) week from charts", value=True)
 
-# === SWAP VOLUME SYNC WITH 4-HOUR RULE ===
-now = datetime.now(timezone.utc)
-last_sync_dt = get_last_sync()
-today = datetime.now(timezone.utc).date()
-start_date = last_sync_dt.date()
+# === SYNC SECTION WRAPPER ===
+def sync_weekly_data(last_sync, now):
+    today = now.date()
+    start_date = last_sync.date()
 
-if (now - last_sync_dt) >= timedelta(hours=4):
-    with st.spinner(f"🔄 Syncing new swap volume from {last_sync_dt.date()} to {now.date()}..."):
-        raw_swaps = fetch_swap_series(start=start_date, end=today)
-        df_swaps = pd.DataFrame(raw_swaps)
-        if not df_swaps.empty:
-            df_swaps["date"] = pd.to_datetime(df_swaps["date"]).dt.date
-            df_swaps["metric"] = "swap_volume"
-            df_swaps["status"] = "success"
-            df_swaps["quantity"] = df_swaps["quantity"].astype(int)
+    # Sync SWAP volume
+    raw_swaps = fetch_swap_series(start=start_date, end=today)
+    df_swaps = pd.DataFrame(raw_swaps)
+    if not df_swaps.empty:
+        df_swaps["date"] = pd.to_datetime(df_swaps["date"]).dt.date
+        df_swaps["metric"] = "swap_volume"
+        df_swaps["status"] = "success"
+        df_swaps["quantity"] = df_swaps["quantity"].astype(int)
+        upsert_chain_timeseries(df_swaps)
 
-            try:
-                upsert_chain_timeseries(df_swaps)
-                update_last_sync(now)
-                st.success(f"✅ Upserted {len(df_swaps)} swap rows.")
-            except Exception as e:
-                st.error(f"❌ Swap upsert failed: {e}")
-        else:
-            st.warning("⚠️ No swap data found to sync.")
-else:
-    next_sync = last_sync_dt + timedelta(hours=4)
-    minutes_remaining = int((next_sync - now).total_seconds() / 60)
-
-    st.info(f"""
-    ✅ Last synced at: `{last_sync_dt.strftime('%Y-%m-%d %H:%M')} UTC`  
-    ⏳ Skipping update — next sync available at: `{next_sync.strftime('%Y-%m-%d %H:%M')} UTC`  
-    🕒 Approximately **{minutes_remaining} minutes** from now.
-    """)
-
-# === SYNC DAILY API METRICS ===
-with st.spinner("🔄 Syncing API metrics..."):
+    # Sync API metrics
     for metric in API_METRICS:
-        sync_file = f"last_sync_{metric}.json"
-        last = DEFAULT_START_DATE
-        if os.path.exists(sync_file):
-            with open(sync_file) as f:
-                last = datetime.strptime(json.load(f)["last_sync"], "%Y-%m-%d").date()
         rows = []
-        for d in pd.date_range(start=last, end=today):
+        for d in pd.date_range(start=start_date, end=today):
             df = fetch_api_metric(metric, d.strftime("%Y-%m-%d"))
             if not df.empty:
                 df["date"] = pd.to_datetime(df["date"]).dt.date
@@ -99,12 +53,9 @@ with st.spinner("🔄 Syncing API metrics..."):
                 rows.append(df)
         if rows:
             all_df = pd.concat(rows)
-            try:
-                upsert_timeseries(metric, all_df)
-                with open(sync_file, "w") as f:
-                    json.dump({"last_sync": today.strftime("%Y-%m-%d")}, f)
-            except Exception as e:
-                st.error(f"❌ API upsert failed for {metric}: {e}")
+            upsert_timeseries(metric, all_df)
+
+sync_section("Weekly_Data", sync_weekly_data)
 
 # === WEEKLY AGG HELPERS ===
 def load_weekly_df(metric, chains=None, status="success"):

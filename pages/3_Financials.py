@@ -2,63 +2,40 @@ import streamlit as st
 import pandas as pd
 import os
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 import plotly.express as px
 import altair as alt
 
-from helpers.fetch import fetch_fee_series
-from helpers.upsert import upsert_fee_series
+from helpers.fetch import fetch_fee_series, fetch_avg_revenue_metrics, fetch_avg_revenue_metrics_for_range, fetch_weekly_avg_revenue_metrics
+from helpers.upsert import upsert_fee_series, upsert_weekly_avg_revenue_metrics
 from helpers.connection import get_cache_db_connection
+from helpers.sync_utils import sync_section
 
 # === PAGE SETUP ===
 st.set_page_config(page_title="Financials", layout="wide")
 st.title("💸 Financials - Fee Analytics")
 
-SYNC_FILE = "last_sync_fees.json"
+# === SYNC BLOCK ===
+def sync_financials(last_sync, now):
+    # === SYNC FEES ===
+    df_fees = fetch_fee_series()
+    if not df_fees.empty:
+        df_fees["date"] = pd.to_datetime(df_fees["date"]).dt.date
+        df_fees = df_fees.groupby(["date", "chain"])["value"].sum().reset_index()
+        upsert_fee_series(df_fees)
 
-def get_last_sync():
-    if os.path.exists(SYNC_FILE):
-        with open(SYNC_FILE, "r") as f:
-            data = json.load(f)
-            raw = data.get("last_sync")
-            try:
-                # Handles full ISO format like '2025-04-10T01:51:35.883788+00:00'
-                return datetime.fromisoformat(raw)
-            except Exception:
-                return datetime(2024, 1, 1, tzinfo=timezone.utc)
-    return datetime(2024, 1, 1, tzinfo=timezone.utc)
+    # === UPDATE 30-DAY AVG REVENUE METRICS ===
+    fetch_avg_revenue_metrics(days=30)
 
-def update_last_sync(sync_datetime):
-    with open(SYNC_FILE, "w") as f:
-        json.dump({"last_sync": sync_datetime.isoformat()}, f)
+    # === UPDATE WEEKLY AVG REVENUE PER ACTIVE USER ===
+    # Compute only current week's data
+    today = date.today()
+    current_week_start = today - timedelta(days=today.weekday())  # Monday
+    weekly_df = fetch_avg_revenue_metrics_for_range(start_date=current_week_start, days=7)
+    if not weekly_df.empty:
+        upsert_weekly_avg_revenue_metrics(weekly_df)
 
-# === SYNC DATA (only if more than 4 hours since last sync) ===
-now = datetime.now(timezone.utc)
-last_sync = get_last_sync()
-
-if (now - last_sync) >= timedelta(hours=4):
-    with st.spinner(f"Syncing fees from {last_sync.date()} to {now.date()}..."):
-        df_fees = fetch_fee_series()
-        if not df_fees.empty:
-            df_fees["date"] = pd.to_datetime(df_fees["date"]).dt.date
-            try:
-                df_fees = df_fees.groupby(["date", "chain"])["value"].sum().reset_index()
-                upsert_fee_series(df_fees)
-                update_last_sync(now)
-                st.success(f"✅ Upserted {len(df_fees)} aggregated fee rows.")
-            except Exception as e:
-                st.error(f"❌ Fee upsert failed: {e}")
-        else:
-            st.warning("No fee data found.")
-else:
-    next_sync = last_sync + timedelta(hours=4)
-    minutes_remaining = int((next_sync - now).total_seconds() / 60)
-
-    st.info(f"""
-    ✅ Last synced at: `{last_sync.strftime('%Y-%m-%d %H:%M')} UTC`  
-    ⏳ Skipping update — next sync available at: `{next_sync.strftime('%Y-%m-%d %H:%M')} UTC`  
-    🕒 Approximately **{minutes_remaining} minutes** from now.
-    """)
+sync_section("Financials", sync_financials)
 
 
 # === FETCH CACHED DATA ===
@@ -159,7 +136,7 @@ prev_month = latest_month - pd.DateOffset(months=1)
 last_month_total = df[df["month"] == prev_month]["value"].sum()
 current_month_total = df[df["month"] == latest_month]["value"].sum()
 
-st.subheader("📆 Monthly Fee Breakdown")
+st.subheader("📊 Monthly Fee Breakdown")
 col5, col6 = st.columns(2)
 col5.metric("Last Month Fees", f"${last_month_total:,.2f}")
 col6.metric("Current Month Fees", f"${current_month_total:,.2f}")
@@ -185,5 +162,49 @@ with col7:
         hole=0.4
     )
     pie.update_traces(textinfo="percent+label")
-    pie.update_layout(title_x=0.5)
-    st.plotly_chart(pie, use_container_width=True)
+    pie.update_layout(title_text="Fee Distribution by Chain", title_x=0.5)
+    st.plotly_chart(pie, use_container_width=True, theme="streamlit")
+
+# === DISPLAY WEEKLY AVG REVENUE CHART + 30-DAY METRICS SIDE BY SIDE ===
+weekly_df = fetch_weekly_avg_revenue_metrics()
+weekly_df["week"] = pd.to_datetime(weekly_df["week"])  # Ensure datetime format
+
+# Filter to match selected date range
+filtered_weekly_df = weekly_df[
+    (weekly_df["week"].dt.date >= start_date) &
+    (weekly_df["week"].dt.date <= end_date)
+].copy()
+
+# Ensure correct type
+filtered_weekly_df["avg_rev_per_active_user"] = filtered_weekly_df["avg_rev_per_active_user"].astype(float)
+
+if not filtered_weekly_df.empty:
+    st.subheader("📊 Weekly Avg Revenue Per Active User + 30-Day Metrics")
+    col11, col12 = st.columns([2, 1])  # Wider left column for chart
+
+    with col11:
+        filtered_weekly_df["week_label"] = filtered_weekly_df["week"].dt.strftime("%b %d")
+
+        avg_rev_chart = alt.Chart(filtered_weekly_df).mark_bar(size=35).encode(
+            x=alt.X("week_label:N", title="Week", sort=filtered_weekly_df["week_label"].tolist()),
+            y=alt.Y("avg_rev_per_active_user:Q", title="Avg Rev / Active User", scale=alt.Scale(nice=True)),
+            tooltip=[
+                alt.Tooltip("week:T", title="Week"),
+                alt.Tooltip("avg_rev_per_active_user:Q", title="Revenue", format=".4f")
+            ]
+        ).properties(
+            width=500,
+            height=500,
+            title="Weekly Avg Revenue Per Active User"
+        )
+
+        st.altair_chart(avg_rev_chart, use_container_width=True)
+
+    with col12:
+        metrics_30d = fetch_avg_revenue_metrics()
+        st.markdown("### 📈 30-Day Monetization")
+        st.metric("Avg Rev / User", f"${metrics_30d['avg_rev_per_user']:.4f}", f"{metrics_30d['total_users']} users")
+        st.metric("Avg Rev / Active User", f"${metrics_30d['avg_rev_per_active_user']:.4f}", f"{metrics_30d['active_users']} active")
+else:
+    st.info("No weekly average revenue data for the selected date range.")
+

@@ -2,6 +2,8 @@
 from helpers.connection import get_cache_db_connection
 import psycopg2
 import time
+import pandas as pd
+
 
 
 def upsert_chain_timeseries(df):
@@ -100,3 +102,47 @@ def upsert_fee_series(df):
     except Exception as e:
         print(f"[ERROR] Failed to upsert fees: {e}")
         raise
+
+def upsert_avg_revenue_metrics(df):
+    """Insert or update average revenue metrics into avg_revenue_metrics table."""
+    from helpers.connection import get_cache_db_connection
+
+    try:
+        with get_cache_db_connection() as conn:
+            with conn.cursor() as cursor:
+                for _, row in df.iterrows():
+                    cursor.execute("""
+                        INSERT INTO avg_revenue_metrics (
+                            date, total_fees, total_users, active_users,
+                            avg_rev_per_user, avg_rev_per_active_user
+                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (date)
+                        DO UPDATE SET
+                            total_fees = EXCLUDED.total_fees,
+                            total_users = EXCLUDED.total_users,
+                            active_users = EXCLUDED.active_users,
+                            avg_rev_per_user = EXCLUDED.avg_rev_per_user,
+                            avg_rev_per_active_user = EXCLUDED.avg_rev_per_active_user
+                    """, (
+                        row["date"], row["total_fees"], row["total_users"],
+                        row["active_users"], row["avg_rev_per_user"], row["avg_rev_per_active_user"]
+                    ))
+            conn.commit()
+    except Exception as e:
+        print(f"[ERROR] Failed to upsert avg revenue metrics: {e}")
+        raise
+
+def upsert_weekly_avg_revenue_metrics(df: pd.DataFrame):
+    from helpers.connection import get_cache_db_connection
+    with get_cache_db_connection() as conn:
+        with conn.cursor() as cur:
+            for _, row in df.iterrows():
+                cur.execute("""
+                    INSERT INTO weekly_avg_revenue_metrics (week, total_fees, active_users, avg_rev_per_active_user)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (week) DO UPDATE
+                    SET total_fees = EXCLUDED.total_fees,
+                        active_users = EXCLUDED.active_users,
+                        avg_rev_per_active_user = EXCLUDED.avg_rev_per_active_user
+                """, (row["week"], row["total_fees"], row["active_users"], row["avg_rev_per_active_user"]))
+        conn.commit()

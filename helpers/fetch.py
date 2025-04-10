@@ -3,9 +3,11 @@ from decimal import Decimal
 import json
 import streamlit as st
 import requests
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from helpers.connection import get_cache_db_connection, get_main_db_connection
 from helpers.constants import CHAIN_ID_MAP
+from helpers.upsert import upsert_avg_revenue_metrics
+
 
 def fetch_timeseries(metric, start_date=None, end_date=None):
     try:
@@ -225,3 +227,100 @@ def fetch_fee_series():
     df = pd.DataFrame(fee_data)
     df["date"] = pd.to_datetime(df["date"])
     return df
+
+def fetch_avg_revenue_metrics(days: int = 30) -> dict:
+    """Fetch cached avg revenue metrics or calculate and store if missing."""
+    snapshot_date = date.today()
+
+    with get_main_db_connection() as conn_main, get_cache_db_connection() as conn_cache:
+        cur_main = conn_main.cursor()
+        cur_cache = conn_cache.cursor()
+
+        # 1. Try to load today's snapshot from DB
+        cur_cache.execute("SELECT * FROM avg_revenue_metrics WHERE date = %s", (snapshot_date,))
+        row = cur_cache.fetchone()
+        if row:
+            return {
+                "date": row[0],
+                "total_fees": float(row[1] or 0),
+                "total_users": row[2],
+                "active_users": row[3],
+                "avg_rev_per_user": float(row[4] or 0),
+                "avg_rev_per_active_user": float(row[5] or 0)
+            }
+
+        # 2. Calculate if not found
+        start_date = snapshot_date - timedelta(days=days)
+
+        cur_cache.execute("SELECT SUM(value) FROM timeseries_fees WHERE date >= %s", (start_date,))
+        total_fees = cur_cache.fetchone()[0] or 0
+
+        cur_main.execute('SELECT COUNT(*) FROM "User" WHERE "createdAt" >= %s', (start_date,))
+        total_users = cur_main.fetchone()[0] or 0
+
+        cur_main.execute('''
+            SELECT COUNT(DISTINCT "userId")
+            FROM "Activity"
+            WHERE type = 'SWAP' AND status = 'SUCCESS' AND "createdAt" >= %s
+        ''', (start_date,))
+        active_users = cur_main.fetchone()[0] or 0
+
+        result = {
+            "date": snapshot_date,
+            "total_fees": total_fees,
+            "total_users": total_users,
+            "active_users": active_users,
+            "avg_rev_per_user": total_fees / total_users if total_users else 0,
+            "avg_rev_per_active_user": total_fees / active_users if active_users else 0,
+        }
+
+        # 3. Upsert it into cache DB
+        upsert_avg_revenue_metrics(pd.DataFrame([result]))
+        return result
+    
+def fetch_avg_revenue_metrics_for_range(start_date: date, days: int = 7) -> pd.DataFrame:
+    """Compute avg revenue metrics for a single date range (used to update current week)."""
+    from helpers.connection import get_main_db_connection, get_cache_db_connection
+    with get_main_db_connection() as conn_main, get_cache_db_connection() as conn_cache:
+        cur_main = conn_main.cursor()
+        cur_cache = conn_cache.cursor()
+
+        end_date = start_date + timedelta(days=days)
+
+        # Total fees
+        cur_cache.execute("SELECT SUM(value) FROM timeseries_fees WHERE date >= %s AND date < %s", (start_date, end_date))
+        total_fees = cur_cache.fetchone()[0] or 0
+
+        # Active users (SWAP txns)
+        cur_main.execute('''
+            SELECT COUNT(DISTINCT "userId")
+            FROM "Activity"
+            WHERE type = 'SWAP' AND status = 'SUCCESS'
+              AND "createdAt" >= %s AND "createdAt" < %s
+        ''', (start_date, end_date))
+        active_users = cur_main.fetchone()[0] or 0
+
+        row = {
+            "week": start_date,
+            "total_fees": total_fees,
+            "active_users": active_users,
+            "avg_rev_per_active_user": total_fees / active_users if active_users else 0
+        }
+
+        return pd.DataFrame([row])
+
+def fetch_weekly_avg_revenue_metrics() -> pd.DataFrame:
+    """Fetch weekly avg revenue per active user from cache DB."""
+    with get_cache_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT week, total_fees, active_users, avg_rev_per_active_user
+                FROM weekly_avg_revenue_metrics
+                ORDER BY week
+            """)
+            rows = cursor.fetchall()
+            df = pd.DataFrame(rows, columns=[
+                "week", "total_fees", "active_users", "avg_rev_per_active_user"
+            ])
+            df["week"] = pd.to_datetime(df["week"])  # ✅ Ensures .dt accessor will work
+            return df

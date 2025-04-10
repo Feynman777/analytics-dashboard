@@ -51,7 +51,15 @@ if (now - last_sync) >= timedelta(hours=4):
         else:
             st.warning("No fee data found.")
 else:
-    st.info("✅ Recently synced, skipping update.")
+    next_sync = last_sync + timedelta(hours=4)
+    minutes_remaining = int((next_sync - now).total_seconds() / 60)
+
+    st.info(f"""
+    ✅ Last synced at: `{last_sync.strftime('%Y-%m-%d %H:%M')} UTC`  
+    ⏳ Skipping update — next sync available at: `{next_sync.strftime('%Y-%m-%d %H:%M')} UTC`  
+    🕒 Approximately **{minutes_remaining} minutes** from now.
+    """)
+
 
 # === FETCH CACHED DATA ===
 def load_fees():

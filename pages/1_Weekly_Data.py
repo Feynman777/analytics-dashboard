@@ -73,7 +73,14 @@ if (now - last_sync_dt) >= timedelta(hours=4):
         else:
             st.warning("⚠️ No swap data found to sync.")
 else:
-    st.info("✅ Recently synced, skipping update.")
+    next_sync = last_sync_dt + timedelta(hours=4)
+    minutes_remaining = int((next_sync - now).total_seconds() / 60)
+
+    st.info(f"""
+    ✅ Last synced at: `{last_sync_dt.strftime('%Y-%m-%d %H:%M')} UTC`  
+    ⏳ Skipping update — next sync available at: `{next_sync.strftime('%Y-%m-%d %H:%M')} UTC`  
+    🕒 Approximately **{minutes_remaining} minutes** from now.
+    """)
 
 # === SYNC DAILY API METRICS ===
 with st.spinner("🔄 Syncing API metrics..."):

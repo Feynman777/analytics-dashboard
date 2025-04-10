@@ -45,7 +45,7 @@ exclude_current_week = st.toggle("🚫 Exclude current (incomplete) week from ch
 # === SYNC NEW SWAP DATA IF AVAILABLE ===
 today = datetime.now(timezone.utc).date()
 last_sync = get_last_sync()
-start_date = last_sync + timedelta(days=1)
+start_date = last_sync
 
 if start_date <= today:
     with st.spinner(f"🔄 Syncing new swap volume from {start_date} to {today}..."):
@@ -78,7 +78,7 @@ with st.spinner("🔄 Syncing API metrics..."):
             with open(sync_file) as f:
                 last = datetime.strptime(json.load(f)["last_sync"], "%Y-%m-%d").date()
         rows = []
-        for d in pd.date_range(start=last + timedelta(days=1), end=today):
+        for d in pd.date_range(start=last, end=today):
             df = fetch_api_metric(metric, d.strftime("%Y-%m-%d"))
             if not df.empty:
                 df["date"] = pd.to_datetime(df["date"]).dt.date

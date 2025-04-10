@@ -82,3 +82,21 @@ def upsert_timeseries(metric, df):
                             raise
     except Exception as e:
         print(f"Error in upsert_timeseries: {e}")
+
+
+def upsert_fee_series(df):
+    """Insert or update fee data into timeseries_fees table."""
+    try:
+        with get_cache_db_connection() as conn:
+            with conn.cursor() as cursor:
+                for _, row in df.iterrows():
+                    cursor.execute("""
+                        INSERT INTO timeseries_fees (date, chain, value)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (date, chain)
+                        DO UPDATE SET value = EXCLUDED.value
+                    """, (row["date"], row["chain"], row["value"]))
+                conn.commit()
+    except Exception as e:
+        print(f"[ERROR] Failed to upsert fees: {e}")
+        raise

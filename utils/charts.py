@@ -99,3 +99,13 @@ def user_line_chart(df, username_col="username"):
         height=400,
         title="📈 Daily Volume (USD)"
     ).interactive()
+
+def simple_bar_chart(df, x_field, y_field, title="Chart"):
+    return alt.Chart(df).mark_bar().encode(
+        x=alt.X(f"{x_field}:T", title="Date"),
+        y=alt.Y(f"{y_field}:Q", title="Value"),
+        tooltip=[alt.Tooltip(f"{x_field}:T"), alt.Tooltip(f"{y_field}:Q", format=",.2f")]
+    ).properties(
+        title=title,
+        height=350
+    )

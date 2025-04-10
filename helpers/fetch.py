@@ -47,6 +47,23 @@ def fetch_timeseries_chain_volume(metric="swap_volume", chains=None, status="suc
                 return df
     except Exception:
         return pd.DataFrame()
+    
+def fetch_cached_fees():
+    try:
+        with get_cache_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT date, chain, value
+                    FROM timeseries_fees
+                    ORDER BY date ASC
+                """)
+                rows = cursor.fetchall()
+                df = pd.DataFrame(rows, columns=["date", "chain", "value"])
+                df["date"] = pd.to_datetime(df["date"])
+                return df
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch cached fees: {e}")
+        return pd.DataFrame()
 
 def fetch_swap_series():
     try:
@@ -137,3 +154,63 @@ def fetch_api_metric(key, start=None, end=None):
         return pd.DataFrame([{"date": start, "value": float(data)}])
     except Exception:
         return pd.DataFrame()
+    
+
+def fetch_fee_series():
+    fee_data = []
+
+    with get_main_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT "createdAt", transaction, "chainIds"
+                FROM public."Activity"
+                WHERE status = 'SUCCESS' AND type = 'SWAP'
+            """)
+            rows = cursor.fetchall()
+
+    for created_at, txn_raw, chain_ids in rows:
+        try:
+            txn = json.loads(txn_raw)
+
+            # === Handle SUI-style fee ===
+            nm_fee = txn.get("route", {}).get("nmFee", {})
+            if nm_fee and "amount" in nm_fee:
+                amount = Decimal(nm_fee.get("amount", 0))
+                token = nm_fee.get("token", {})
+                price_usd = Decimal(token.get("tokenPrices", {}).get("usd", 0))
+                decimals = int(token.get("decimals", 18))
+
+                if amount > 0 and price_usd > 0:
+                    value_usd = float(amount * price_usd / Decimal(10 ** decimals))
+                    fee_data.append({
+                        "date": created_at.date().isoformat(),
+                        "chain": chain_ids[0] if chain_ids else "unknown",
+                        "value": value_usd
+                    })
+
+            # === Handle LIFI-style fee ===
+            steps = txn.get("route", {}).get("steps", [])
+            for step in steps:
+                estimate = step.get("estimate", {})
+                fee_costs = estimate.get("feeCosts", [])
+
+                for fee in fee_costs:
+                    amount = Decimal(fee.get("amount", 0))
+                    token = fee.get("token", {})
+                    price_usd = Decimal(token.get("priceUSD", 0))
+                    decimals = int(token.get("decimals", 18))
+
+                    if amount > 0 and price_usd > 0:
+                        value_usd = float(amount * price_usd / Decimal(10 ** decimals))
+                        fee_data.append({
+                            "date": created_at.date().isoformat(),
+                            "chain": chain_ids[0] if chain_ids else "unknown",
+                            "value": value_usd
+                        })
+
+        except Exception:
+            continue
+
+    df = pd.DataFrame(fee_data)
+    df["date"] = pd.to_datetime(df["date"])
+    return df

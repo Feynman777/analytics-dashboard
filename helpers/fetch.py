@@ -65,16 +65,26 @@ def fetch_cached_fees():
         print(f"[ERROR] Failed to fetch cached fees: {e}")
         return pd.DataFrame()
 
-def fetch_swap_series():
+def fetch_swap_series(start=None, end=None):
     try:
         with get_main_db_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("""
+                query = """
                     SELECT "createdAt", transaction, "chainIds"
                     FROM public."Activity"
                     WHERE status = 'SUCCESS' AND type = 'SWAP'
-                """)
+                """
+                params = []
+                if start:
+                    query += " AND DATE(\"createdAt\") >= %s"
+                    params.append(start)
+                if end:
+                    query += " AND DATE(\"createdAt\") <= %s"
+                    params.append(end)
+
+                cursor.execute(query, params)
                 rows = cursor.fetchall()
+
                 swap_data = {}
                 for created_at, txn_raw, chain_ids in rows:
                     try:
@@ -126,6 +136,7 @@ def fetch_swap_series():
                 return list(swap_data.values())
     except Exception:
         return []
+
 
 HEADERS = {
     "Authorization": f"Basic {st.secrets['api']['AUTH_KEY']}"

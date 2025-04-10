@@ -114,7 +114,7 @@ col3, col4 = st.columns(2)
 
 with col3:
     weekly_fees["week_label"] = weekly_fees["week"].dt.strftime("%b %d")
-    weekly_chart = alt.Chart(weekly_fees).mark_bar(size=45).encode(
+    weekly_chart = alt.Chart(weekly_fees).mark_bar(size=35).encode(
         x=alt.X("week_label:N", title="Week", sort=weekly_fees["week_label"].tolist()),
         y=alt.Y("value:Q", title="Total Fees"),
         tooltip=[

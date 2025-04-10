@@ -55,7 +55,7 @@ def metric_section(df, title, label, col="value"):
             alt.Tooltip("week_str:N", title="Week"),
             alt.Tooltip(f"{col}:Q", title=label, format=",.2f")
         ]
-    ).properties(height=300)
+    ).properties(height=500)
 
 def user_volume_chart(df):
     return alt.Chart(df).mark_line(point=True).encode(

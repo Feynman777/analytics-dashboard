@@ -28,12 +28,18 @@ def get_last_sync():
     if os.path.exists(SYNC_FILE):
         with open(SYNC_FILE, "r") as f:
             data = json.load(f)
-            return datetime.strptime(data["last_sync"], "%Y-%m-%d").date()
-    return datetime.strptime("2024-01-01", "%Y-%m-%d").date()
+            raw = data.get("last_sync")
+            try:
+                # Try full ISO format with timezone
+                return datetime.fromisoformat(raw)
+            except ValueError:
+                # Fallback to plain date
+                return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return datetime(2024, 1, 1, tzinfo=timezone.utc)
 
-def update_last_sync(sync_date):
+def update_last_sync(sync_datetime):
     with open(SYNC_FILE, "w") as f:
-        json.dump({"last_sync": sync_date.strftime("%Y-%m-%d")}, f)
+        json.dump({"last_sync": sync_datetime.isoformat()}, f)
 
 # === CHAIN SELECTION ===
 available_chains = ["base", "arbitrum", "ethereum", "polygon", "avalanche", "mode", "bnb", "sui", "solana", "optimism"]
@@ -42,16 +48,16 @@ selected_chains = st.multiselect("Select chains to include:", available_chains, 
 # === EXCLUDE CURRENT WEEK TOGGLE ===
 exclude_current_week = st.toggle("🚫 Exclude current (incomplete) week from charts", value=True)
 
-# === SYNC NEW SWAP DATA IF AVAILABLE ===
+# === SWAP VOLUME SYNC WITH 4-HOUR RULE ===
+now = datetime.now(timezone.utc)
+last_sync_dt = get_last_sync()
 today = datetime.now(timezone.utc).date()
-last_sync = get_last_sync()
-start_date = last_sync
+start_date = last_sync_dt.date()
 
-if start_date <= today:
-    with st.spinner(f"🔄 Syncing new swap volume from {start_date} to {today}..."):
-        raw_swaps = fetch_swap_series()
+if (now - last_sync_dt) >= timedelta(hours=4):
+    with st.spinner(f"🔄 Syncing new swap volume from {last_sync_dt.date()} to {now.date()}..."):
+        raw_swaps = fetch_swap_series(start=start_date, end=today)
         df_swaps = pd.DataFrame(raw_swaps)
-        print(type(raw_swaps))  # Expecting <class 'list'>
         if not df_swaps.empty:
             df_swaps["date"] = pd.to_datetime(df_swaps["date"]).dt.date
             df_swaps["metric"] = "swap_volume"
@@ -60,14 +66,14 @@ if start_date <= today:
 
             try:
                 upsert_chain_timeseries(df_swaps)
-                update_last_sync(today)
+                update_last_sync(now)
                 st.success(f"✅ Upserted {len(df_swaps)} swap rows.")
             except Exception as e:
                 st.error(f"❌ Swap upsert failed: {e}")
         else:
             st.warning("⚠️ No swap data found to sync.")
 else:
-    st.info("✅ Fully synced!")
+    st.info("✅ Recently synced, skipping update.")
 
 # === SYNC DAILY API METRICS ===
 with st.spinner("🔄 Syncing API metrics..."):

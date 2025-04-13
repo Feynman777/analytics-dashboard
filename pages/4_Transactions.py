@@ -16,33 +16,46 @@ st.title("🔄 Transactions")
 if "search_filter" not in st.session_state:
     st.session_state.search_filter = ""
 
-# === Global Filters ===
-col1, col2, col3, col4 = st.columns([2.5, 2.5, 2, 3])
+# === Top Filters Layout ===
+col1, col2 = st.columns([3, 2])
 with col1:
-    start_date = st.date_input("Start Date Filter", value=date(2025, 1, 1))
-with col2:
-    end_date_default = date.today() + timedelta(days=1)
-    apply_today = st.checkbox("Include today", value=True)
-    end_date = end_date_default if apply_today else st.date_input("End Date Filter", value=date.today())
-
-with col3:
-    selected_chains = st.multiselect(
-        "Chain Filter",
-        ["base", "arbitrum", "ethereum", "polygon", "avalanche", "mode", "bnb", "sui", "solana", "optimism"]
+    user_input = st.text_input(
+        "Search User (for stats) by Username, Email, or any of their Wallet Addresses",
+        key="user_stats_input"
     )
-with col4:
-    user_input = st.text_input("Search User (for stats)", key="user_stats_input")
-    if st.button("Load User Stats"):
-        with get_main_db_connection() as conn:
-            profile = fetch_user_profile_summary(conn, user_input)
-            metrics = fetch_user_metrics_full(user_input, start=start_date.isoformat(), end=end_date.isoformat())
+
+with col2:
+    start_date = st.date_input("Start Date Filter", value=date(2025, 1, 1))
+
+end_date_default = date.today() + timedelta(days=1)
+apply_today = st.checkbox("Include today", value=True)
+end_date = end_date_default if apply_today else st.date_input("End Date Filter", value=date.today())
+
+# === Load User Stats Button ===
+if st.button("Load User Stats"):
+    with get_main_db_connection() as conn:
+        profile = fetch_user_profile_summary(conn, user_input)
+
+    if profile:
+        resolved_identifier = profile.get("username") or profile.get("email")
+        if not resolved_identifier:
+            st.warning("User found, but no valid username or email to query.")
+        else:
+            metrics = fetch_user_metrics_full(
+                resolved_identifier,
+                start=start_date.isoformat(),
+                end=end_date.isoformat()
+            )
             st.session_state.user_profile = profile
             st.session_state.user_stats = metrics
+    else:
+        st.warning("No user found for that input.")
 
 # === Use stored filter input before fetching data ===
 search_filter = st.session_state.search_filter
 
 # === Fetch Filtered Transactions ===
+selected_chains = []  # initialize before filters
 chain_filters = selected_chains if selected_chains else None
 txn_data = fetch_transactions_filtered(
     search_user_or_email=search_filter if search_filter else None,
@@ -57,7 +70,7 @@ df = pd.DataFrame(txn_data, columns=[
     "From Chain", "To Token", "To Chain", "Amount USD", "Tx Hash"
 ])
 
-# === Display User Stats (only when button pressed)
+# === Display User Stats (only when button pressed) ===
 if "user_profile" in st.session_state and "user_stats" in st.session_state:
     profile = st.session_state.user_profile
     user = st.session_state.user_stats
@@ -71,7 +84,7 @@ if "user_profile" in st.session_state and "user_stats" in st.session_state:
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            st.markdown("#### General Info")
+            st.markdown("General Info")
             st.write("**Username:**", username)
             st.write("**Email:**", email)
             st.write("**Joined:**", created_at)
@@ -83,27 +96,32 @@ if "user_profile" in st.session_state and "user_stats" in st.session_state:
             st.write("**Cash Balance (USD):**", f"${float(user['cash'].get('balance', 0)):,.2f}")
 
         with col2:
-            st.markdown("#### Lifetime Stats")
+            st.markdown("Lifetime Stats")
             st.write("**Swap Volume:**", f"${user['lifetime'].get('volume', {}).get('volume', 0):,.2f}")
             st.write("**Referrals:**", user["lifetime"].get("referrals", 0))
 
         with col3:
-            st.markdown("#### Date-Filtered Stats")
+            st.markdown("Date-Filtered Stats")
             st.write("**Swap Volume:**", f"${user['filtered'].get('volume', {}).get('volume', 0):,.2f}")
             st.write("**Referrals:**", user["filtered"].get("referrals", 0))
 
-# === Table Filter Input UI (shown below stats)
-st.markdown("### 🔍 Filter Transactions Table")
-ft_col1, ft_col2 = st.columns([3, 1])
-with ft_col1:
-    search_input = st.text_input("Filter by Username, Email, or Wallet", value=st.session_state.search_filter, key="txn_filter_input")
-with ft_col2:
-    if st.button("Apply Table Filter"):
-        st.session_state.search_filter = search_input
-        st.rerun()
+        # === Table Filter Input UI + Chain Filter (moved here) ===
+        st.markdown("🔍 Filter Transactions Table")
+        ft_col1, ft_col2, ft_col3 = st.columns([2, 2, 2])
+        with ft_col1:
+            search_input = st.text_input("Filter by Username, Email, or Wallet", value=st.session_state.search_filter, key="txn_filter_input")
+        with ft_col2:
+            selected_chains = st.multiselect(
+                "Chain Filter",
+                ["base", "arbitrum", "ethereum", "polygon", "avalanche", "mode", "bnb", "sui", "solana", "optimism"]
+            )
+        with ft_col3:
+            if st.button("Apply Table Filter"):
+                st.session_state.search_filter = search_input
+                st.rerun()
 
 # === Display Table ===
-st.subheader("📋 Transactions Table")
+st.subheader("🖥 Transactions Table")
 
 gb = GridOptionsBuilder.from_dataframe(df)
 gb.configure_pagination(paginationAutoPageSize=True)

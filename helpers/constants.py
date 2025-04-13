@@ -8,5 +8,6 @@ CHAIN_ID_MAP = {
     43114: "avalanche",
     34443: "mode",
     56: "bnb",
-    10: "optimism"
+    10: "optimism",
+    1151111081099710: "solana",  # support alternate Solana ID found in txn["chainId"]
 }

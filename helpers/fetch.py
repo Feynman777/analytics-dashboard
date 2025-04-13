@@ -3,10 +3,13 @@ from decimal import Decimal
 import json
 import streamlit as st
 import requests
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from collections import defaultdict
+from psycopg2.extras import RealDictCursor
 from helpers.connection import get_cache_db_connection, get_main_db_connection
 from helpers.constants import CHAIN_ID_MAP
 from helpers.upsert import upsert_avg_revenue_metrics
+from utils.transactions import normalize
 
 
 def fetch_timeseries(metric, start_date=None, end_date=None):
@@ -145,8 +148,16 @@ HEADERS = {
 }
 ENDPOINTS = dict(st.secrets["api"])
 
-def fetch_api_metric(key, start=None, end=None):
+def fetch_api_metric(key, start=None, end=None, username=None):
     url = ENDPOINTS[key]
+
+    # Inject username into the URL path if applicable
+    if username and "{username}" not in url:
+        if url.endswith("/"):
+            url += username
+        else:
+            url += f"/{username}"
+
     params = {}
     if start:
         params["start"] = start
@@ -156,17 +167,32 @@ def fetch_api_metric(key, start=None, end=None):
             else:
                 end = start
         params["end"] = end
+
     try:
         res = requests.get(url, headers=HEADERS, params=params)
         res.raise_for_status()
         data = res.json()
-        if isinstance(data, list):
+
+        # Handle dict response like {"volume": 208.19, "qty": 13}
+        if isinstance(data, dict):
+            # Special case for full user profile with nested keys
+            if key == "user_full_metrics":
+                return data
+            return pd.DataFrame([{"date": start, **data}])
+
+        # Handle array-style responses
+        elif isinstance(data, list):
             return pd.DataFrame(data)
-        elif isinstance(data, dict) and "value" in data:
-            return pd.DataFrame([{"date": start, "value": float(data["value"])}])
+
+        # Catch-all fallback
         return pd.DataFrame([{"date": start, "value": float(data)}])
-    except Exception:
+
+    except Exception as e:
+        print(f"[ERROR] fetch_api_metric failed: {e}")
         return pd.DataFrame()
+
+
+
     
 
 def fetch_fee_series():
@@ -324,3 +350,398 @@ def fetch_weekly_avg_revenue_metrics() -> pd.DataFrame:
             ])
             df["week"] = pd.to_datetime(df["week"])  # ✅ Ensures .dt accessor will work
             return df
+        
+# === Utility Helpers ===
+
+
+def parse_txn_json(txn_raw):
+    try:
+        if isinstance(txn_raw, dict):
+            return txn_raw
+        return json.loads(txn_raw)
+    except Exception:
+        return {}
+    
+def format_token(token):
+    if not token:
+        return "N/A"
+    symbol = token.get("symbol", "N/A")
+    chain = token.get("chainId") or token.get("chain", "N/A")
+    return f"{symbol} ({chain})"
+
+# === Main Dashboard Stats ===
+def fetch_home_stats(conn):
+    now = datetime.now(timezone.utc)
+    day_ago = now - timedelta(days=1)
+
+    results = {
+        "24h": defaultdict(float),
+        "lifetime": defaultdict(float),
+    }
+
+    with conn.cursor() as cursor:
+        for scope, time_filter in [("24h", day_ago), ("lifetime", None)]:
+            cursor.execute(f"""
+                SELECT type, "userId", transaction
+                FROM "Activity"
+                WHERE status = 'SUCCESS'
+                {f'AND "createdAt" >= %s' if time_filter else ''}
+            """, (time_filter,) if time_filter else ())
+
+            user_ids = set()
+            for typ, user_id, txn_raw in cursor.fetchall():
+                user_ids.add(user_id)
+                txn = parse_txn_json(txn_raw)
+                from_amt = Decimal(txn.get("fromAmount", 0))
+                from_token = txn.get("fromToken", {})
+                price = Decimal(from_token.get("tokenPrices", {}).get("usd", 0))
+                decimals = int(from_token.get("decimals", 18))
+
+                usd_value = normalize(from_amt, price, decimals)
+
+                if typ == "SWAP":
+                    results[scope]["swap_volume"] += usd_value
+                    results[scope]["swaps"] += 1
+                elif "CASH" in typ:
+                    results[scope]["cash_volume"] += usd_value
+
+                results[scope]["revenue"] += usd_value * 0.003
+                results[scope]["transactions"] += 1
+
+            results[scope]["active_users"] = len(user_ids)
+
+        cursor.execute('SELECT COUNT(*) FROM "User"')
+        results["lifetime"]["total_users"] = cursor.fetchone()[0]
+
+    return results
+
+
+# === Recent Transactions ===
+def fetch_recent_transactions(conn, limit=10):
+    data = []
+
+    # Load userId → username map
+    user_id_map = {}
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT "userId", username FROM "User"')
+        for user_id, username in cursor.fetchall():
+            user_id_map[user_id] = username
+
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            SELECT "createdAt", "userId", type, status, transaction
+            FROM "Activity"
+            WHERE type != 'DAPP'
+            ORDER BY "createdAt" DESC
+            LIMIT %s
+        """, (limit,))
+
+        for created_at, user_id, typ, status, txn_raw in cursor.fetchall():
+            txn = parse_txn_json(txn_raw)
+            from_token, to_token = {}, {}
+            amount_usd = 0
+
+            # === From User ===
+            from_user = (
+                user_id_map.get(user_id)
+                or txn.get("fromUsername")
+                or txn.get("fromAddress")
+                or user_id
+                or "N/A"
+            )
+
+            # === To User ===
+            to_user = "N/A"
+            if typ in ("SWAP", "BRIDGE"):
+                to_user = from_user
+
+            elif typ == "SEND":
+                to_addr = txn.get("toAddress", "").lower()
+                if to_addr:
+                    with conn.cursor() as c2:
+                        c2.execute("""
+                            SELECT u."userId"
+                            FROM "Wallet" w
+                            JOIN "WalletAccount" wa ON w."walletAccountId" = wa."id"
+                            JOIN "User" u ON wa."userId" = u."userId"
+                            WHERE LOWER(w."address") = %s
+                            LIMIT 1
+                        """, (to_addr,))
+                        row = c2.fetchone()
+                        if row:
+                            to_user_id = row[0]
+                            to_user = user_id_map.get(to_user_id, to_user_id)
+                        else:
+                            to_user = to_addr
+
+            elif typ == "CASH":
+                substatus = txn.get("subStatus")
+                if substatus == "CONVERT":
+                    to_user = txn.get("type", "CASH_CONVERT")
+                else:
+                    to_user_id = txn.get("toUserId")
+                    to_user = (
+                        user_id_map.get(to_user_id)
+                        or txn.get("toUsername")
+                        or txn.get("toExternalUser")
+                        or to_user_id
+                        or "N/A"
+                    )
+
+            # === Format Token ===
+            def format_token(tkn):
+                if not tkn:
+                    return "N/A"
+                symbol = tkn.get("symbol", "N/A")
+                chain_id = tkn.get("chainId")
+                chain = CHAIN_ID_MAP.get(chain_id, chain_id)
+                return f"{symbol} ({chain})"
+
+            def normalize_amount_safe(amount, token):
+                try:
+                    price = float(token.get("tokenPrices", {}).get("usd", 1))
+                    decimals = int(token.get("decimals", 18))
+                    return float(Decimal(amount) * Decimal(price) / Decimal(10**decimals))
+                except Exception:
+                    return 0
+
+            # === Token + Amount Logic ===
+            if typ == "SWAP":
+                from_token = txn.get("fromToken", {})
+                to_token = txn.get("toToken", {})
+                amount_usd = normalize_amount_safe(txn.get("fromAmount", 0), from_token)
+
+            elif typ == "SEND":
+                from_token = txn.get("token", {})
+                to_token = from_token
+                amount_usd = normalize_amount_safe(txn.get("amount", 0), from_token)
+
+            elif typ == "CASH":
+                from_token = txn.get("token", {})
+                to_token = from_token
+                amount_usd = float(txn.get("amount", 0) or 0)
+
+            elif typ == "BRIDGE":
+                from_token = txn.get("fromToken", {})
+                to_token = txn.get("toToken", {})
+                amount_usd = normalize_amount_safe(txn.get("fromAmount", 0), from_token)
+
+            # === Final Row Append ===
+            data.append({
+                "From User": from_user,
+                "To User": to_user,
+                "Date": created_at.strftime("%Y-%m-%d"),
+                "Time": created_at.strftime("%H:%M:%S"),
+                "Type": typ,
+                "Status": status,
+                "From Token (Chain)": format_token(from_token),
+                "To Token (Chain)": format_token(to_token),
+                "Amount USD": round(amount_usd, 2),
+            })
+
+    return data
+
+
+def fetch_top_users_last_7d(conn, limit=10):
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    user_totals = defaultdict(float)
+
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            SELECT u.username, a.transaction
+            FROM "Activity" a
+            JOIN "User" u ON a."userId" = u."userId"
+            WHERE a.type = 'SWAP' AND a.status = 'SUCCESS' AND a."createdAt" >= %s
+        """, (week_ago,))
+
+        for username, txn_raw in cursor.fetchall():
+            txn = parse_txn_json(txn_raw)
+            from_amt = Decimal(txn.get("fromAmount", 0))
+            from_token = txn.get("fromToken", {})
+            price = Decimal(from_token.get("tokenPrices", {}).get("usd", 0))
+            decimals = int(from_token.get("decimals", 18))
+
+            usd_value = normalize(from_amt, price, decimals)
+            user_totals[username] += usd_value
+
+    return sorted(user_totals.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+def fetch_transactions_filtered(
+    tx_type=None,
+    min_amount=None,
+    from_chain=None,
+    to_chain=None,
+    from_token=None,
+    to_token=None,
+    search_user_or_email=None,
+    since_date=None,
+    limit=500,
+):
+    conn = get_cache_db_connection()
+    with conn.cursor() as cur:
+        query = '''
+            SELECT created_at, type, status, from_user, to_user,
+                   from_token, from_chain, to_token, to_chain,
+                   amount_usd, tx_hash
+            FROM transactions_cache
+            WHERE 1=1
+        '''
+        params = []
+
+        if tx_type:
+            query += ' AND type = %s'
+            params.append(tx_type)
+
+        if min_amount:
+            query += ' AND amount_usd >= %s'
+            params.append(min_amount)
+
+        if from_chain:
+            query += ' AND from_chain = %s'
+            params.append(from_chain)
+
+        if to_chain:
+            query += ' AND to_chain = %s'
+            params.append(to_chain)
+
+        if from_token:
+            query += ' AND from_token = %s'
+            params.append(from_token)
+
+        if to_token:
+            query += ' AND to_token = %s'
+            params.append(to_token)
+
+        if search_user_or_email:
+            search_str = f"%{search_user_or_email.lower()}%"
+            query += ' AND (LOWER(from_user) LIKE %s OR LOWER(to_user) LIKE %s)'
+            params.extend([search_str, search_str])
+
+        if since_date:
+            query += ' AND created_at >= %s'
+            params.append(since_date)
+
+        query += ' ORDER BY created_at DESC LIMIT %s'
+        params.append(limit)
+
+        cur.execute(query, params)
+        rows = cur.fetchall()
+
+    sanitized = []
+    for row in rows:
+        row = list(row)
+        row[3] = sanitize_username(row[3])  # from_user
+        row[4] = sanitize_username(row[4])  # to_user
+        sanitized.append(row)
+
+    return sanitized
+
+def sanitize_username(username):
+    """
+    Ensures the value is treated as a user identifier or label, and filters out None or unknown values.
+    """
+    if not username or str(username).lower() in ("none", "null", ""):
+        return "Unknown"
+    
+    # If the value is a subStatus label, keep as-is
+    known_labels = [
+        "DEPOSIT", "WITHDRAW", "RECEIVE", "SEND", "CONVERT",
+        "CONVERT: CASH TO CRYPTO", "CONVERT: CRYPTO TO CASH"
+    ]
+    if str(username).upper() in known_labels:
+        return str(username).upper()
+
+    return str(username)
+
+def fetch_user_profile_summary(conn, query_input):
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        # Try match on username or email
+        cursor.execute("""
+            SELECT u."userId", u.username, u.email, u."createdAt",
+                   w.address AS wallet
+            FROM "User" u
+            LEFT JOIN "WalletAccount" wa ON wa."userId" = u."userId"
+            LEFT JOIN "Wallet" w ON w."walletAccountId" = wa."id"
+            WHERE LOWER(u.username) = LOWER(%s) OR LOWER(u.email) = LOWER(%s)
+            LIMIT 1
+        """, (query_input, query_input))
+        result = cursor.fetchone()
+
+        if result:
+            return result
+
+        # Try resolving wallet address → userId
+        cursor.execute("""
+            SELECT u."userId", u.username, u.email, u."createdAt", w.address
+            FROM "Wallet" w
+            JOIN "WalletAccount" wa ON w."walletAccountId" = wa."id"
+            JOIN "User" u ON wa."userId" = u."userId"
+            WHERE LOWER(w."address") = LOWER(%s)
+            LIMIT 1
+        """, (query_input,))
+        return cursor.fetchone()
+
+    
+def fetch_user_metrics_full(username: str, start: str = None, end: str = None):
+    result = {
+        "profile": {},
+        "cash": {},
+        "crypto": {},
+        "lifetime": {},
+        "filtered": {}
+    }
+
+    try:
+        # === Base Profile and Wallets ===
+        full_profile = fetch_api_metric("user_full_metrics", username=username)
+        if isinstance(full_profile, dict):
+            result["cash"] = full_profile.get("cash", {})
+            result["crypto"] = full_profile.get("crypto", {})
+            result["profile"] = {
+                "email": full_profile.get("email"),
+                "createdAt": full_profile.get("createdAt"),
+                "evm": full_profile.get("evmAddress"),
+                "solana": full_profile.get("solaAddress"),
+                "btc": full_profile.get("btcAddress"),
+                "sui": full_profile.get("suiAddress"),
+            }
+
+        # === Lifetime Volume & Referrals ===
+        volume_data = fetch_api_metric("user_volume", username=username)
+        if isinstance(volume_data, pd.DataFrame) and not volume_data.empty:
+            row = volume_data.iloc[0]
+            result["lifetime"]["volume"] = {
+                "volume": row.get("volume", 0),
+                "qty": row.get("qty", 0),
+            }
+
+        referrals_data = fetch_api_metric("referrals", username=username)
+        if isinstance(referrals_data, pd.DataFrame) and not referrals_data.empty:
+            row = referrals_data.iloc[0]
+            result["lifetime"]["referrals"] = int(row.get("value", 0))
+
+        # === Filtered Volume & Referrals ===
+        if start:
+            if not end:
+                end = date.today().strftime("%Y-%m-%d")
+
+            vol_filtered = fetch_api_metric("user_volume", username=username, start=start, end=end)
+            if isinstance(vol_filtered, pd.DataFrame) and not vol_filtered.empty:
+                row = vol_filtered.iloc[0]
+                result["filtered"]["volume"] = {
+                    "volume": row.get("volume", 0),
+                    "qty": row.get("qty", 0),
+                }
+
+            ref_filtered = fetch_api_metric("referrals", username=username, start=start, end=end)
+            if isinstance(ref_filtered, pd.DataFrame) and not ref_filtered.empty:
+                row = ref_filtered.iloc[0]
+                result["filtered"]["referrals"] = int(row.get("value", 0))
+
+    except Exception as e:
+        print(f"[ERROR] fetch_user_metrics_full failed: {e}")
+
+    return result
+
+
+

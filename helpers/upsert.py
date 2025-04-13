@@ -1,9 +1,13 @@
 # upsert.py
-from helpers.connection import get_cache_db_connection
 import psycopg2
 import time
 import pandas as pd
-
+from datetime import datetime
+from tqdm import tqdm
+import json
+from helpers.connection import get_main_db_connection, get_cache_db_connection
+from helpers.constants import CHAIN_ID_MAP
+from utils.transactions import transform_activity_transaction
 
 
 def upsert_chain_timeseries(df):
@@ -146,3 +150,82 @@ def upsert_weekly_avg_revenue_metrics(df: pd.DataFrame):
                         avg_rev_per_active_user = EXCLUDED.avg_rev_per_active_user
                 """, (row["week"], row["total_fees"], row["active_users"], row["avg_rev_per_active_user"]))
         conn.commit()
+
+def upsert_transactions_from_activity(force=False, batch_size=100):
+    main_conn = get_main_db_connection()
+    cache_conn = get_cache_db_connection()
+
+    with main_conn.cursor() as cur_main, cache_conn.cursor() as cur_cache:
+        # Determine sync start date
+        sync_start = datetime(2025, 1, 1)
+        if not force:
+            cur_cache.execute("SELECT MAX(created_at) FROM transactions_cache")
+            latest_cached = cur_cache.fetchone()[0]
+            if latest_cached:
+                sync_start = latest_cached
+
+        # Get total to process
+        cur_main.execute('''
+            SELECT COUNT(*) FROM "Activity"
+            WHERE "createdAt" >= %s
+        ''', (sync_start,))
+        total_rows = cur_main.fetchone()[0]
+        print(f"Total rows to sync: {total_rows}")
+
+        for offset in range(0, total_rows, batch_size):
+            print(f"\n⏳ Syncing batch: {offset} → {offset + batch_size}")
+            cur_main.execute('''
+                SELECT "createdAt", "userId", type, status, hash, transaction, "chainIds"
+                FROM "Activity"
+                WHERE "createdAt" >= %s
+                ORDER BY "createdAt" ASC
+                LIMIT %s OFFSET %s
+            ''', (sync_start, batch_size, offset))
+
+            rows = cur_main.fetchall()
+            if not rows:
+                break
+
+            for created_at, user_id, typ, status, tx_hash, txn_raw, chain_ids in tqdm(rows):
+                tx_data = transform_activity_transaction(
+                    created_at=created_at,
+                    user_id=user_id,
+                    typ=typ,
+                    status=status,
+                    tx_hash=tx_hash,
+                    txn_raw=txn_raw,
+                    chain_ids=chain_ids,
+                    conn=main_conn
+                )
+                if not tx_data or not tx_data.get("tx_hash"):
+                    continue
+
+                cur_cache.execute('''
+                    INSERT INTO transactions_cache (
+                        created_at, type, status, from_user, to_user,
+                        from_token, from_chain, to_token, to_chain,
+                        amount_usd, tx_hash, chain_id, raw_transaction
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (tx_hash) DO UPDATE SET
+                        amount_usd = EXCLUDED.amount_usd,
+                        to_user = EXCLUDED.to_user,
+                        from_user = EXCLUDED.from_user,
+                        from_token = EXCLUDED.from_token,
+                        to_token = EXCLUDED.to_token,
+                        from_chain = EXCLUDED.from_chain,
+                        to_chain = EXCLUDED.to_chain,
+                        raw_transaction = EXCLUDED.raw_transaction
+                ''', (
+                    tx_data["created_at"], tx_data["type"], tx_data["status"],
+                    tx_data["from_user"], tx_data["to_user"],
+                    tx_data["from_token"], tx_data["from_chain"],
+                    tx_data["to_token"], tx_data["to_chain"],
+                    tx_data["amount_usd"], tx_data["tx_hash"],
+                    tx_data["chain_id"], json.dumps(tx_data["raw_transaction"])
+                ))
+
+            cache_conn.commit()
+            print(f"✅ Batch {offset // batch_size + 1} committed.")
+
+    print("🎉 Upsert from Activity complete.")
+

@@ -7,6 +7,10 @@ from decimal import Decimal
 from io import StringIO
 from helpers.connection import get_main_db_connection
 from utils.charts import user_volume_chart, user_txn_detail_chart
+from helpers.fetch import fetch_top_users_last_7d
+
+conn = get_main_db_connection()
+top_users = fetch_top_users_last_7d(conn)
 
 def get_user_daily_volume(username):
     try:
@@ -97,3 +101,14 @@ if usernames:
         if not df_ts_first.empty and st.toggle("Show transaction-level detail for first user"):
             st.altair_chart(user_txn_detail_chart(df_ts_first, username_list[0]), use_container_width=True)
             st.dataframe(df_ts_first.style.format({"volume_usd": "{:.2f}"}), use_container_width=True)
+
+top_users_df = pd.DataFrame([
+    {"Username": username, "Swap Volume": f"${float(volume or 0):,.2f}"}
+    for username, volume in top_users
+])
+
+st.subheader("Top Users (7d)")
+with st.container():
+    col1, _ = st.columns([1, 1])
+    with col1:
+        st.dataframe(top_users_df, hide_index=True, use_container_width=True)

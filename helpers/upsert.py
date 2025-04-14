@@ -2,14 +2,23 @@
 import psycopg2
 import time
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from tqdm import tqdm
 import json
 from helpers.connection import get_main_db_connection, get_cache_db_connection
 from helpers.constants import CHAIN_ID_MAP
-from utils.transactions import transform_activity_transaction
+from utils.transactions import transform_activity_transaction, resolve_username_by_userid, resolve_username_by_address
 
-
+def get_latest_cached_timestamp():
+    try:
+        with get_cache_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT MAX(created_at) FROM transactions_cache")
+                return cur.fetchone()[0] or datetime(2024, 1, 1, tzinfo=timezone.utc)
+    except Exception as e:
+        print(f"❌ Error fetching latest created_at from cache: {e}")
+        return datetime(2024, 1, 1, tzinfo=timezone.utc)
+    
 def upsert_chain_timeseries(df):
     """
     Upserts a list of dictionaries into the timeseries_chain_volume table.
@@ -151,20 +160,24 @@ def upsert_weekly_avg_revenue_metrics(df: pd.DataFrame):
                 """, (row["week"], row["total_fees"], row["active_users"], row["avg_rev_per_active_user"]))
         conn.commit()
 
+def generate_fallback_tx_hash(created_at, offset):
+    timestamp_str = created_at.strftime("%Y%m%d%H%M%S")
+    return f"unknown-{timestamp_str}-{offset}"
+
 def upsert_transactions_from_activity(force=False, batch_size=100):
+    print("🔥 upsert_transactions_from_activity() called")
+
     main_conn = get_main_db_connection()
     cache_conn = get_cache_db_connection()
 
     with main_conn.cursor() as cur_main, cache_conn.cursor() as cur_cache:
-        # Determine sync start date
-        sync_start = datetime(2025, 1, 1)
-        if not force:
-            cur_cache.execute("SELECT MAX(created_at) FROM transactions_cache")
-            latest_cached = cur_cache.fetchone()[0]
-            if latest_cached:
-                sync_start = latest_cached
+        cur_cache.execute("SELECT MAX(created_at) FROM transactions_cache")
+        latest_cached = cur_cache.fetchone()[0]
+        if latest_cached:
+            sync_start = latest_cached - timedelta(hours=4)
+        else:
+            sync_start = datetime(2024, 3, 19)
 
-        # Get total to process
         cur_main.execute('''
             SELECT COUNT(*) FROM "Activity"
             WHERE "createdAt" >= %s
@@ -186,46 +199,52 @@ def upsert_transactions_from_activity(force=False, batch_size=100):
             if not rows:
                 break
 
-            for created_at, user_id, typ, status, tx_hash, txn_raw, chain_ids in tqdm(rows):
-                tx_data = transform_activity_transaction(
-                    created_at=created_at,
-                    user_id=user_id,
-                    typ=typ,
-                    status=status,
-                    tx_hash=tx_hash,
-                    txn_raw=txn_raw,
-                    chain_ids=chain_ids,
-                    conn=main_conn
-                )
-                if not tx_data or not tx_data.get("tx_hash"):
-                    continue
+            for idx, (created_at, user_id, typ, status, tx_hash, txn_raw, chain_ids) in enumerate(rows):
+                try:
+                    tx_data = transform_activity_transaction(
+                        tx_hash=tx_hash,
+                        txn_raw=txn_raw,
+                        typ=typ,
+                        status=status,
+                        created_at=created_at,
+                        user_id=user_id,
+                        conn=main_conn,
+                        chain_ids=chain_ids
+                    )
 
-                cur_cache.execute('''
-                    INSERT INTO transactions_cache (
-                        created_at, type, status, from_user, to_user,
-                        from_token, from_chain, to_token, to_chain,
-                        amount_usd, tx_hash, chain_id, raw_transaction
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (tx_hash) DO UPDATE SET
-                        amount_usd = EXCLUDED.amount_usd,
-                        to_user = EXCLUDED.to_user,
-                        from_user = EXCLUDED.from_user,
-                        from_token = EXCLUDED.from_token,
-                        to_token = EXCLUDED.to_token,
-                        from_chain = EXCLUDED.from_chain,
-                        to_chain = EXCLUDED.to_chain,
-                        raw_transaction = EXCLUDED.raw_transaction
-                ''', (
-                    tx_data["created_at"], tx_data["type"], tx_data["status"],
-                    tx_data["from_user"], tx_data["to_user"],
-                    tx_data["from_token"], tx_data["from_chain"],
-                    tx_data["to_token"], tx_data["to_chain"],
-                    tx_data["amount_usd"], tx_data["tx_hash"],
-                    tx_data["chain_id"], json.dumps(tx_data["raw_transaction"])
-                ))
+                    tx_data["tx_hash"] = tx_hash or generate_fallback_tx_hash(created_at, offset + idx)
+
+                    cur_cache.execute('''
+                        INSERT INTO transactions_cache (
+                            created_at, type, status, from_user, to_user,
+                            from_token, from_chain, to_token, to_chain,
+                            amount_usd, tx_hash, chain_id, raw_transaction
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (tx_hash) DO UPDATE SET
+                            amount_usd = EXCLUDED.amount_usd,
+                            to_user = EXCLUDED.to_user,
+                            from_user = EXCLUDED.from_user,
+                            from_token = EXCLUDED.from_token,
+                            to_token = EXCLUDED.to_token,
+                            from_chain = EXCLUDED.from_chain,
+                            to_chain = EXCLUDED.to_chain,
+                            raw_transaction = EXCLUDED.raw_transaction,
+                            status = EXCLUDED.status,
+                            created_at = EXCLUDED.created_at
+                    ''', (
+                        tx_data["created_at"], tx_data["type"], tx_data["status"],
+                        tx_data["from_user"], tx_data["to_user"],
+                        tx_data["from_token"], tx_data["from_chain"],
+                        tx_data["to_token"], tx_data["to_chain"],
+                        tx_data["amount_usd"], tx_data["tx_hash"],
+                        tx_data["chain_id"], json.dumps(tx_data["raw_transaction"])
+                    ))
+
+                except Exception as e:
+                    print(f"❌ Failed to process txn at {created_at}: {e}")
+                    continue
 
             cache_conn.commit()
             print(f"✅ Batch {offset // batch_size + 1} committed.")
 
     print("🎉 Upsert from Activity complete.")
-

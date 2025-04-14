@@ -28,12 +28,10 @@ def get_chain_ids(txn, activity_chain_ids):
         elif len(activity_chain_ids) == 1:
             return int(activity_chain_ids[0]), int(activity_chain_ids[0])
 
-    # === Fallback for CASH ===
     chain_id = txn.get("chainId")
     if chain_id:
         return int(chain_id), int(chain_id)
 
-    # === Fallback for SWAP/BRIDGE ===
     from_id = txn.get("fromChainId") or txn.get("route", {}).get("fromChainId")
     to_id = txn.get("toChainId") or txn.get("route", {}).get("toChainId")
 
@@ -48,8 +46,48 @@ def get_chain_ids(txn, activity_chain_ids):
 
     return from_id, to_id
 
-def transform_activity_transaction(txn, typ, status, created_at, user_id, resolve_username_by_userid, resolve_username_by_address, chain_ids=None):
-    from_user = resolve_username_by_userid(user_id)
+def resolve_username_by_userid(user_id, conn):
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('SELECT username FROM "User" WHERE "userId" = %s LIMIT 1', (user_id,))
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else user_id
+    except Exception:
+        return user_id
+
+def resolve_username_by_address(address, conn):
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT u.username
+                FROM "Wallet" w
+                JOIN "WalletAccount" wa ON w."walletAccountId" = wa."id"
+                JOIN "User" u ON wa."userId" = u."userId"
+                WHERE LOWER(w.address) = LOWER(%s)
+                LIMIT 1
+            ''', (address,))
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else address
+    except Exception:
+        return address
+
+def transform_activity_transaction(
+    tx_hash,
+    txn_raw,
+    typ,
+    status,
+    created_at,
+    user_id,
+    conn,
+    chain_ids=None
+):
+    try:
+        txn = json.loads(txn_raw) if isinstance(txn_raw, str) else txn_raw
+    except Exception as e:
+        print(f"❌ Failed to parse txn JSON: {e}")
+        return None
+
+    from_user = resolve_username_by_userid(user_id, conn)
     to_user = None
     from_token = to_token = from_chain = to_chain = None
     amount_usd = 0
@@ -67,16 +105,14 @@ def transform_activity_transaction(txn, typ, status, created_at, user_id, resolv
         if sub_status in ("SEND", "RECEIVE"):
             from_user_id = txn.get("fromUserId")
             to_user_id = txn.get("toUserId")
-            from_user = resolve_username_by_userid(from_user_id) if from_user_id else None
-            to_user = resolve_username_by_userid(to_user_id) if to_user_id else None
+            from_user = resolve_username_by_userid(from_user_id, conn) if from_user_id else None
+            to_user = resolve_username_by_userid(to_user_id, conn) if to_user_id else None
         elif sub_status == "CONVERT":
             convert_type = txn.get("type")
-            if convert_type == "CASH_TO_CRYPTO":
-                to_user = "CONVERT: CASH TO CRYPTO"
-            elif convert_type == "CRYPTO_TO_CASH":
-                to_user = "CONVERT: CRYPTO TO CASH"
-            else:
-                to_user = "CONVERT"
+            to_user = {
+                "CASH_TO_CRYPTO": "CONVERT: CASH TO CRYPTO",
+                "CRYPTO_TO_CASH": "CONVERT: CRYPTO TO CASH"
+            }.get(convert_type, "CONVERT")
         elif sub_status in ("DEPOSIT", "WITHDRAW"):
             to_user = sub_status
         else:
@@ -86,7 +122,7 @@ def transform_activity_transaction(txn, typ, status, created_at, user_id, resolv
         token = txn.get("token", {})
         amount_usd = normalize(txn.get("amount", 0), token.get("tokenPrices", {}).get("usd", 1), token.get("decimals", 18))
         from_token = to_token = token.get("symbol")
-        to_user = resolve_username_by_address(txn.get("toAddress"))
+        to_user = resolve_username_by_address(txn.get("toAddress"), conn)
 
     elif typ in ("SWAP", "BRIDGE"):
         from_meta = txn.get("fromToken") or txn.get("route", {}).get("fromToken", {})
@@ -111,5 +147,6 @@ def transform_activity_transaction(txn, typ, status, created_at, user_id, resolv
         "to_chain": to_chain,
         "amount_usd": min(amount_usd, 999999.99),
         "chain_id": from_chain_id,
+        "tx_hash": tx_hash,
         "raw_transaction": txn
     }

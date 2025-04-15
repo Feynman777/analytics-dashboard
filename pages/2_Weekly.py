@@ -2,7 +2,7 @@
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import timedelta, datetime, timezone
 
 from helpers.fetch import (
     fetch_swap_series,
@@ -29,11 +29,11 @@ exclude_current_week = st.toggle("🚫 Exclude current (incomplete) week from ch
 
 # === SYNC SECTION WRAPPER ===
 def sync_weekly_data(last_sync, now):
-    today = now.date()
-    start_date = last_sync.date()
+    start_date = (last_sync - timedelta(hours=2)).date() # number of hours to sync back from timestamp in Weekly
+    end_date = now.date()
 
-    # Sync SWAP volume
-    raw_swaps = fetch_swap_series(start=start_date, end=today)
+    # === Sync SWAP Volume (from transactions_cache via fetch_swap_series)
+    raw_swaps = fetch_swap_series(start=start_date, end=end_date)
     df_swaps = pd.DataFrame(raw_swaps)
     if not df_swaps.empty:
         df_swaps["date"] = pd.to_datetime(df_swaps["date"]).dt.date
@@ -42,10 +42,10 @@ def sync_weekly_data(last_sync, now):
         df_swaps["quantity"] = df_swaps["quantity"].astype(int)
         upsert_chain_timeseries(df_swaps)
 
-    # Sync API metrics
+    # === Sync API Metrics (cash_volume, new_users, etc.)
     for metric in API_METRICS:
         rows = []
-        for d in pd.date_range(start=start_date, end=today):
+        for d in pd.date_range(start=start_date, end=end_date):
             df = fetch_api_metric(metric, d.strftime("%Y-%m-%d"))
             if not df.empty:
                 df["date"] = pd.to_datetime(df["date"]).dt.date

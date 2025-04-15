@@ -4,7 +4,6 @@ from datetime import date, datetime, timedelta
 import plotly.express as px
 
 from helpers.fetch import (
-    fetch_fee_series,
     fetch_avg_revenue_metrics,
     fetch_avg_revenue_metrics_for_range,
     fetch_weekly_avg_revenue_metrics
@@ -15,34 +14,38 @@ from helpers.upsert import (
 )
 from helpers.connection import get_cache_db_connection
 from helpers.sync_utils import sync_section
+from helpers.fee_utils import fetch_fee_series
 
 from charts.financials.weekly_fees import render_weekly_fees
 from charts.financials.daily_fees import render_daily_fees
 from charts.financials.fee_distribution import render_fee_distribution
 from charts.financials.weekly_avg_rev import render_weekly_avg_rev
 
-
 # === PAGE SETUP ===
 st.set_page_config(page_title="Financials", layout="wide")
 st.title("💸 Financials - Fee Analytics")
 
 # === SYNC BLOCK ===
-def sync_financials(_, __):  # Ignore last_sync, now
+def sync_financials(last_sync, now):
     df_fees = fetch_fee_series()
     if not df_fees.empty:
         df_fees["date"] = pd.to_datetime(df_fees["date"]).dt.date
         df_fees = df_fees.groupby(["date", "chain"])["value"].sum().reset_index()
         upsert_fee_series(df_fees)
 
+    # Upsert daily snapshot
     fetch_avg_revenue_metrics(days=30)
 
-    today = date.today()
-    current_week_start = today - timedelta(days=today.weekday())  # Monday
-    weekly_df = fetch_avg_revenue_metrics_for_range(start_date=current_week_start, days=7)
-    if not weekly_df.empty:
-        upsert_weekly_avg_revenue_metrics(weekly_df)
+    # Upsert weekly aggregates for each full week between last_sync and now
+    start = last_sync.date()
+    today = now.date()
+    start_of_week = start - timedelta(days=start.weekday())  # round to Monday
 
-sync_section("Financials", sync_financials)
+    while start_of_week <= today:
+        weekly_df = fetch_avg_revenue_metrics_for_range(start_date=start_of_week, days=7)
+        if not weekly_df.empty:
+            upsert_weekly_avg_revenue_metrics(weekly_df)
+        start_of_week += timedelta(days=7)
 
 # === FETCH CACHED DATA ===
 @st.cache_data(ttl=3600)
@@ -120,13 +123,13 @@ col5.metric("Last Month Fees", f"${last_month_total:,.2f}")
 col6.metric("Current Month Fees", f"${current_month_total:,.2f}")
 
 # === CHAIN FEE DISTRIBUTION PIE CHART ===
-CHAIN_ID_MAP = {
-    8453: "base", 42161: "arbitrum", 137: "polygon", 1: "ethereum",
-    101: "solana", 2: "sui", 43114: "avalanche", 34443: "mode",
-    56: "bnb", 10: "optimism"
-}
 chain_distro = filtered_df.groupby("chain", as_index=False)["value"].sum()
-chain_distro["chain"] = chain_distro["chain"].apply(lambda cid: CHAIN_ID_MAP.get(int(cid), str(cid)))
+
+# Clean + sort
+chain_distro["chain"] = chain_distro["chain"].fillna("unknown").astype(str)
+chain_distro = chain_distro.sort_values("value", ascending=False)
+
+print("[DEBUG] Chain values (cleaned):", chain_distro["chain"].unique())
 
 st.subheader("📊 Fee Distribution by Chain")
 col7, col8 = st.columns([1.5, 1])

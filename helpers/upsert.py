@@ -2,12 +2,14 @@
 import psycopg2
 import time
 import pandas as pd
+import hashlib
 from datetime import datetime, timezone, timedelta
 from tqdm import tqdm
 import json
 from helpers.connection import get_main_db_connection, get_cache_db_connection
 from helpers.constants import CHAIN_ID_MAP
-from utils.transactions import transform_activity_transaction, resolve_username_by_userid, resolve_username_by_address
+from utils.transactions import transform_activity_transaction, generate_fallback_tx_hash
+from utils.transactions import safe_float, generate_fallback_tx_hash
 
 def get_latest_cached_timestamp():
     try:
@@ -56,7 +58,6 @@ def upsert_chain_timeseries(df):
         print(f"Error in upsert_chain_timeseries: {e}")
         raise
 
-
 def upsert_timeseries(metric, df):
     """
     Upserts a pandas DataFrame into the timeseries_cache table.
@@ -97,7 +98,6 @@ def upsert_timeseries(metric, df):
                             raise
     except Exception as e:
         print(f"Error in upsert_timeseries: {e}")
-
 
 def upsert_fee_series(df):
     """Insert or update fee data into timeseries_fees table."""
@@ -146,7 +146,6 @@ def upsert_avg_revenue_metrics(df):
         raise
 
 def upsert_weekly_avg_revenue_metrics(df: pd.DataFrame):
-    from helpers.connection import get_cache_db_connection
     with get_cache_db_connection() as conn:
         with conn.cursor() as cur:
             for _, row in df.iterrows():
@@ -160,42 +159,55 @@ def upsert_weekly_avg_revenue_metrics(df: pd.DataFrame):
                 """, (row["week"], row["total_fees"], row["active_users"], row["avg_rev_per_active_user"]))
         conn.commit()
 
-def generate_fallback_tx_hash(created_at, offset):
-    timestamp_str = created_at.strftime("%Y%m%d%H%M%S")
-    return f"unknown-{timestamp_str}-{offset}"
+def upsert_transactions_from_activity(force=False, batch_size=100, start=None, end=None):
 
-def upsert_transactions_from_activity(force=False, batch_size=100):
     print("🔥 upsert_transactions_from_activity() called")
 
     main_conn = get_main_db_connection()
     cache_conn = get_cache_db_connection()
 
     with main_conn.cursor() as cur_main, cache_conn.cursor() as cur_cache:
-        cur_cache.execute("SELECT MAX(created_at) FROM transactions_cache")
-        latest_cached = cur_cache.fetchone()[0]
-        if latest_cached:
-            sync_start = latest_cached - timedelta(hours=4)
+        # Determine sync range
+        if start:
+            sync_start = start
+        elif force:
+            sync_start = datetime.now(timezone.utc) - timedelta(hours=4)
         else:
-            sync_start = datetime(2024, 3, 19)
+            cur_cache.execute("SELECT MAX(created_at) FROM transactions_cache")
+            latest_cached = cur_cache.fetchone()[0]
+            if latest_cached:
+                sync_start = latest_cached - timedelta(hours=12)
+            else:
+                sync_start = datetime(2025, 4, 14, tzinfo=timezone.utc)
+
+        sync_end = end or datetime.now(timezone.utc)
+
+        print(f"⏱️ Syncing from: {sync_start} → {sync_end} (force={force})")
 
         cur_main.execute('''
             SELECT COUNT(*) FROM "Activity"
-            WHERE "createdAt" >= %s
-        ''', (sync_start,))
+            WHERE "createdAt" >= %s AND "createdAt" < %s
+        ''', (sync_start, sync_end))
         total_rows = cur_main.fetchone()[0]
-        print(f"Total rows to sync: {total_rows}")
+        print(f"🔍 Total rows to sync: {total_rows}")
+
+        insert_count = 0
 
         for offset in range(0, total_rows, batch_size):
             print(f"\n⏳ Syncing batch: {offset} → {offset + batch_size}")
             cur_main.execute('''
                 SELECT "createdAt", "userId", type, status, hash, transaction, "chainIds"
                 FROM "Activity"
-                WHERE "createdAt" >= %s
+                WHERE "createdAt" >= %s AND "createdAt" < %s
                 ORDER BY "createdAt" ASC
                 LIMIT %s OFFSET %s
-            ''', (sync_start, batch_size, offset))
+            ''', (sync_start, sync_end, batch_size, offset))
 
             rows = cur_main.fetchall()
+            print(f"📦 Rows fetched: {len(rows)}")
+            #for preview in rows[:3]:
+                #print("[Preview Activity]", preview)
+
             if not rows:
                 break
 
@@ -212,16 +224,19 @@ def upsert_transactions_from_activity(force=False, batch_size=100):
                         chain_ids=chain_ids
                     )
 
-                    tx_data["tx_hash"] = tx_hash or generate_fallback_tx_hash(created_at, offset + idx)
+                    tx_data["tx_hash"] = tx_data.get("tx_hash") or generate_fallback_tx_hash(created_at)
+                    #print(f"📤 Upserting transaction: {tx_data['tx_hash']}")
+                    #print(json.dumps(tx_data, indent=2, default=str))
 
                     cur_cache.execute('''
                         INSERT INTO transactions_cache (
                             created_at, type, status, from_user, to_user,
                             from_token, from_chain, to_token, to_chain,
-                            amount_usd, tx_hash, chain_id, raw_transaction
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            amount_usd, fee_usd, tx_hash, chain_id, raw_transaction, tx_display
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (tx_hash) DO UPDATE SET
                             amount_usd = EXCLUDED.amount_usd,
+                            fee_usd = EXCLUDED.fee_usd,
                             to_user = EXCLUDED.to_user,
                             from_user = EXCLUDED.from_user,
                             from_token = EXCLUDED.from_token,
@@ -230,21 +245,36 @@ def upsert_transactions_from_activity(force=False, batch_size=100):
                             to_chain = EXCLUDED.to_chain,
                             raw_transaction = EXCLUDED.raw_transaction,
                             status = EXCLUDED.status,
+                            tx_display = EXCLUDED.tx_display,
                             created_at = EXCLUDED.created_at
                     ''', (
                         tx_data["created_at"], tx_data["type"], tx_data["status"],
                         tx_data["from_user"], tx_data["to_user"],
                         tx_data["from_token"], tx_data["from_chain"],
                         tx_data["to_token"], tx_data["to_chain"],
-                        tx_data["amount_usd"], tx_data["tx_hash"],
-                        tx_data["chain_id"], json.dumps(tx_data["raw_transaction"])
+                        safe_float(tx_data.get("amount_usd")), safe_float(tx_data.get("fee_usd")),
+                        tx_data["tx_hash"], tx_data["chain_id"],
+                        json.dumps(tx_data["raw_transaction"]), tx_data.get("tx_display")
                     ))
 
+                    if tx_data.get("tx_display"):
+                        print(f"[DEBUG] Upserting tx_display for {tx_data['tx_hash']}: {tx_data['tx_display']}")
+                    else:
+                        print(f"[DEBUG] Missing tx_display for {tx_data['tx_hash']}")
+
+                    insert_count += 1
+
                 except Exception as e:
-                    print(f"❌ Failed to process txn at {created_at}: {e}")
+                    print("❌ Failed to process txn with values:")
+                    print(f"  tx_hash: {tx_hash}")
+                    print(f"  created_at: {created_at}")
+                    print(f"  fee_usd: {tx_data.get('fee_usd') if 'tx_data' in locals() else 'N/A'}")
+                    print(f"  amount_usd: {tx_data.get('amount_usd') if 'tx_data' in locals() else 'N/A'}")
+                    import traceback
+                    print(traceback.format_exc())
                     continue
 
             cache_conn.commit()
-            print(f"✅ Batch {offset // batch_size + 1} committed.")
+            print(f"✅ Batch {offset // batch_size + 1} committed — {insert_count} transactions upserted.")
 
     print("🎉 Upsert from Activity complete.")

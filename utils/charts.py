@@ -87,7 +87,6 @@ def user_txn_detail_chart(df, username):
         title=f"📈 Transaction Volume for {username}"
     ).interactive()
 
-
 def user_line_chart(df, username_col="username"):
     return alt.Chart(df).mark_line(point=True).encode(
         x=alt.X("date:T", title="Date"),

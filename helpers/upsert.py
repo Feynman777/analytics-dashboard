@@ -224,16 +224,38 @@ def upsert_transactions_from_activity(force=False, batch_size=100, start=None, e
                         chain_ids=chain_ids
                     )
 
-                    tx_data["tx_hash"] = tx_data.get("tx_hash") or generate_fallback_tx_hash(created_at)
-                    #print(f"📤 Upserting transaction: {tx_data['tx_hash']}")
-                    #print(json.dumps(tx_data, indent=2, default=str))
+                    #tx_data["tx_hash"] = tx_data.get("tx_hash") or generate_fallback_tx_hash(created_at, txn_raw)
+                    # ✅ Add this null guard immediately after transform
+                    if not tx_data or not tx_data.get("tx_hash"):
+                        print("❗ tx_hash is STILL None after transform — skipping this transaction")
+                        continue
+
+                    to_user = tx_data["to_user"]
+                    if isinstance(to_user, dict):
+                        to_user = to_user.get("username")
+
+
+                    if tx_data["type"] == "SWAP" and tx_data["tx_hash"].startswith("unknown"):
+                        print("🚨 About to write fallback SWAP:")
+                        print(f"  status = {tx_data['status']}")
+                        print(f"  tx_hash = {tx_data['tx_hash']}")
+                        print(f"  full row = {tx_data}")
+
+                    
+                    if tx_data["type"] == "SWAP" and tx_data["tx_hash"] and tx_data["tx_hash"].startswith("unknown"):
+                        tx_data["status"] = "FAIL"
+
+                    print(f"📝 UPSERTING: tx_hash={tx_data['tx_hash']} | type={tx_data['type']} | status={tx_data['status']}")
+                    if tx_data["tx_hash"].startswith("unknown-") and tx_data["type"] == "SWAP":
+                        tx_data["status"] = "FAIL"  # lock in FAIL, always
+                        print(f"🛡️ FINAL OVERRIDE: Force FAIL for unknown fallback SWAP: {tx_data['tx_hash']}")
 
                     cur_cache.execute('''
                         INSERT INTO transactions_cache (
                             created_at, type, status, from_user, to_user,
                             from_token, from_chain, to_token, to_chain,
-                            amount_usd, fee_usd, tx_hash, chain_id, raw_transaction, tx_display
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            amount_usd, fee_usd, tx_hash, chain_id, tx_display
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (tx_hash) DO UPDATE SET
                             amount_usd = EXCLUDED.amount_usd,
                             fee_usd = EXCLUDED.fee_usd,
@@ -243,24 +265,17 @@ def upsert_transactions_from_activity(force=False, batch_size=100, start=None, e
                             to_token = EXCLUDED.to_token,
                             from_chain = EXCLUDED.from_chain,
                             to_chain = EXCLUDED.to_chain,
-                            raw_transaction = EXCLUDED.raw_transaction,
                             status = EXCLUDED.status,
                             tx_display = EXCLUDED.tx_display,
                             created_at = EXCLUDED.created_at
                     ''', (
                         tx_data["created_at"], tx_data["type"], tx_data["status"],
-                        tx_data["from_user"], tx_data["to_user"],
+                        tx_data["from_user"], to_user,
                         tx_data["from_token"], tx_data["from_chain"],
                         tx_data["to_token"], tx_data["to_chain"],
                         safe_float(tx_data.get("amount_usd")), safe_float(tx_data.get("fee_usd")),
-                        tx_data["tx_hash"], tx_data["chain_id"],
-                        json.dumps(tx_data["raw_transaction"]), tx_data.get("tx_display")
+                        tx_data["tx_hash"], tx_data["chain_id"], tx_data.get("tx_display")
                     ))
-
-                    if tx_data.get("tx_display"):
-                        print(f"[DEBUG] Upserting tx_display for {tx_data['tx_hash']}: {tx_data['tx_display']}")
-                    else:
-                        print(f"[DEBUG] Missing tx_display for {tx_data['tx_hash']}")
 
                     insert_count += 1
 

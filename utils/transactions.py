@@ -123,7 +123,8 @@ def transform_activity_transaction(
     created_at,
     user_id,
     conn,
-    chain_ids=None
+    chain_ids=None,
+    existing=None
 ):
     from_user = resolve_username_by_userid(user_id, conn)
     to_user = None
@@ -132,20 +133,27 @@ def transform_activity_transaction(
     fee_usd = 0
     tx_display = None
 
-    # Generate fallback hash if necessary
-    if typ != "DAPP" and (not tx_hash or tx_hash.startswith("unknown")):
-        tx_hash = generate_fallback_tx_hash(created_at, txn_raw)
 
+    # Parse transaction safely
     try:
         txn = json.loads(txn_raw) if isinstance(txn_raw, str) else txn_raw
     except Exception as e:
         print(f"❌ Failed to parse txn JSON: {e}")
         return None
 
-    # Patch SUI FAILs to SUCCESS
-    if chain_ids and 2 in chain_ids and status == "FAIL" and tx_hash and not tx_hash.startswith("unknown"):
-        print(f"[PATCH] Corrected SUI txn {tx_hash} from FAIL to SUCCESS")
-        status = "SUCCESS"
+    # Patch SUI FAILs to SUCCESS — but skip if tx_hash was originally None
+    if typ == "SWAP":
+        print(f"type = {typ}")
+        print("✅ yes - swap")
+        print(f"tx_hash = {tx_hash}")
+        if not tx_hash:
+            print("❌ tx_hash was None originally — skip patching this SUI SWAP")
+        if chain_ids and 2 in chain_ids and status == "FAIL" and tx_hash and not tx_hash.startswith("unknown"):
+            print(f"[PATCH] Corrected SUI txn {tx_hash} from FAIL to SUCCESS")
+            status = "SUCCESS"
+    else:
+        print(f"type = {typ}")
+        print("❌ no - not swap")
 
     # Chain mapping
     from_chain_id, to_chain_id = get_chain_ids(txn, chain_ids)
@@ -154,15 +162,13 @@ def transform_activity_transaction(
 
     # === SEND Transaction ===
     if typ == "SEND":
-        print(f"[DEBUG] Parsing SEND tx: {tx_hash}")
-
         from_meta = txn.get("fromToken") or txn.get("route", {}).get("fromToken", {}) or txn.get("token", {})
         to_meta = txn.get("toToken") or txn.get("route", {}).get("toToken", {}) or from_meta
 
         from_token = from_meta.get("symbol")
         to_token = to_meta.get("symbol")
 
-        amount_raw = txn.get("fromAmount") or txn.get("route", {}).get("fromAmount") or txn.get("amount") or 0
+        amount_raw = txn.get("amount") or 0
         price = from_meta.get("tokenPrices", {}).get("usd") or from_meta.get("priceUSD") or 1
         decimals = int(from_meta.get("decimals", 18))
 
@@ -226,9 +232,26 @@ def transform_activity_transaction(
     # === DAPP Transaction ===
     elif typ == "DAPP":
         tx_display = format_dapp_tx_display(txn_raw)
-        print(f"[DAPP] Overwriting tx_hash for DAPP: {tx_display}")
 
-    # === Return Final Structure ===
+    # === CASH Transaction ===
+    elif typ == "CASH":
+        amount_usd = safe_float(txn.get("amount", 0))
+        fee_usd = safe_float(txn.get("fee", 0))
+
+        token_meta = txn.get("token", {})
+        from_token = to_token = token_meta.get("symbol", "USD")
+        to_user = from_user
+
+    if typ == "SWAP" and chain_ids and 2 in chain_ids:
+        print(f"[SUI SWAP] Final status: {status} | tx_hash: {tx_hash}")
+
+    print(f"[FINAL] {tx_hash} | {typ} | {status} | {amount_usd}")
+
+    # 🚨 FINAL status override for fallback SWAPs
+    if typ == "SWAP" and (not tx_hash or tx_hash.startswith("unknown")):
+        status = "FAIL"
+        print(f"🛡️ OVERRIDE: Enforced FAIL status for fallback SWAP tx_hash={tx_hash}")
+
     return {
         "created_at": created_at,
         "type": typ,
@@ -244,5 +267,5 @@ def transform_activity_transaction(
         "chain_id": from_chain_id,
         "tx_hash": tx_hash,
         "raw_transaction": txn,
-        "tx_display": tx_display
+        "tx_display": tx_display,
     }

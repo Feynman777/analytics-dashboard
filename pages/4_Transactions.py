@@ -176,6 +176,10 @@ st.subheader("📋 Transactions Table")
 gb = GridOptionsBuilder.from_dataframe(df)
 gb.configure_pagination(paginationAutoPageSize=True)
 gb.configure_default_column(filter=True, sortable=True, resizable=True)
+
+# ✅ Add this to enable the side bar (column selector, filters, etc.)
+gb.configure_side_bar()
+
 gb.configure_column("Type", filter="agSetColumnFilter")
 gb.configure_column("Status", filter="agSetColumnFilter")
 gb.configure_column("From User", filter="agTextColumnFilter")
@@ -194,7 +198,13 @@ AgGrid(
     update_mode=GridUpdateMode.MODEL_CHANGED,
     theme="balham",
     height=600,
-    fit_columns_on_grid_load=True
+    fit_columns_on_grid_load=True,
+
+    # ✅ Optional: Enable full enterprise features
+    enable_enterprise_modules=True,
+
+    # ✅ Optional: Allow JS-based features
+    allow_unsafe_jscode=True
 )
 
 # === Total Amount USD Summary ===

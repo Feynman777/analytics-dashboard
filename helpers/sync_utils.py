@@ -10,9 +10,9 @@ from helpers.upsert import upsert_fee_series, upsert_weekly_avg_revenue_metrics
 SYNC_FILE = "last_sync.json"
 
 SECTION_DELTA_MAP = {
-    "Transactions": timedelta(hours=2),
-    "Financials": timedelta(hours=2),
-    "Weekly_Data": timedelta(hours=2),
+    "Transactions": timedelta(hours=1),
+    "Financials": timedelta(hours=1),
+    "Weekly_Data": timedelta(hours=1),
 }
 
 def patch_sui_failures_as_success(conn):
@@ -33,7 +33,7 @@ def sync_transaction_cache(force=False):
     now = datetime.now(timezone.utc)
 
     if force:
-        start = now - timedelta(hours=4)
+        start = now - timedelta(hours=2)
         end = now
     else:
         start = get_last_sync(SECTION_KEY)

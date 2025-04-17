@@ -21,14 +21,14 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Last 24h")
-    st.metric("Transactions", float(stats["24h"]["transactions"]))
+    st.metric("Transactions (24h)", f'{int(stats["24h"]["transactions"]):,}')
     st.metric("Swap Volume", f"${float(stats['24h']['swap_volume']):,.2f}")
     st.metric("Revenue", f"${float(stats['24h']['revenue']):,.2f}")
     st.metric("Active Users", int(stats["24h"]["active_users"]))
 
 with col2:
     st.subheader("Lifetime")
-    st.metric("Lifetime Transactions", float(stats["lifetime"]["transactions"]))
+    st.metric("Lifetime Transactions", f'{int(stats["lifetime"]["transactions"]):,}')
     st.metric("Lifetime Swap Volume", f"${float(stats['lifetime']['swap_volume']):,.2f}")
     st.metric("Lifetime Revenue", f"${float(stats['lifetime']['revenue']):,.2f}")
     st.metric("Total Users", int(stats["lifetime"]["total_users"]))

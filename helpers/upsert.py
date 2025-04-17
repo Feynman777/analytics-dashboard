@@ -171,12 +171,12 @@ def upsert_transactions_from_activity(force=False, batch_size=100, start=None, e
         if start:
             sync_start = start
         elif force:
-            sync_start = datetime.now(timezone.utc) - timedelta(hours=4)
+            sync_start = datetime.now(timezone.utc) - timedelta(hours=2)
         else:
             cur_cache.execute("SELECT MAX(created_at) FROM transactions_cache")
             latest_cached = cur_cache.fetchone()[0]
             if latest_cached:
-                sync_start = latest_cached - timedelta(hours=12)
+                sync_start = latest_cached - timedelta(hours=2)
             else:
                 sync_start = datetime(2025, 4, 14, tzinfo=timezone.utc)
 

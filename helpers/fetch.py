@@ -314,32 +314,24 @@ def fetch_home_stats(main_conn, cache_conn):
     with cache_conn.cursor() as cursor:
         for scope, time_filter in [("24h", day_ago), ("lifetime", None)]:
             cursor.execute(f"""
-                SELECT type, from_user, raw_transaction
+                SELECT type, from_user, amount_usd, tx_display
                 FROM transactions_cache
                 WHERE status = 'SUCCESS'
                 {f'AND created_at >= %s' if time_filter else ''}
             """, (time_filter,) if time_filter else ())
 
             users = set()
-            for typ, from_user, txn_raw in cursor.fetchall():
+            for typ, from_user, amount_usd, tx_display in cursor.fetchall():
                 users.add(from_user)
-                txn = parse_txn_json(txn_raw)
-                from_amt = Decimal(txn.get("fromAmount", 0))
-                from_token = txn.get("fromToken", {})
-                price = Decimal(from_token.get("tokenPrices", {}).get("usd", 0))
-                decimals = int(from_token.get("decimals", 18))
-
-                usd_value = float(from_amt * price / Decimal(10**decimals)) if price > 0 else 0.0
+                amount = float(amount_usd or 0)
 
                 if typ == "SWAP":
-                    results[scope]["swap_volume"] += usd_value
+                    results[scope]["swap_volume"] += amount
                     results[scope]["swaps"] += 1
                 elif typ == "SEND":
                     results[scope]["crypto_sends"] += 1
-                elif typ == "CASH":
-                    sub_status = txn.get("subStatus")
-                    if sub_status == "SEND":
-                        results[scope]["cash_sends"] += 1
+                elif typ == "CASH" and tx_display == "SEND":
+                    results[scope]["cash_sends"] += 1
 
                 results[scope]["transactions"] += 1
 
@@ -357,18 +349,16 @@ def fetch_home_stats(main_conn, cache_conn):
         rev_lifetime = cursor.fetchone()[0] or 0
         results["lifetime"]["revenue"] = float(rev_lifetime)
 
-    # === User Table Queries (New Users, New Active Users, Total Users) ===
+    # === User Table Queries (New Users, Total Users) ===
     with main_conn.cursor() as cursor:
-        cursor.execute("SELECT COUNT(*) FROM \"User\"")
+        cursor.execute('SELECT COUNT(*) FROM "User"')
         results["lifetime"]["total_users"] = cursor.fetchone()[0]
 
-        cursor.execute("""
-            SELECT "userId", "createdAt" FROM "User"
-        """)
+        cursor.execute('SELECT "userId", "createdAt" FROM "User"')
         all_users = cursor.fetchall()
         new_users = {uid for uid, created in all_users if created >= day_ago}
 
-    # Back in cache DB: identify recent active users
+    # === Active Users (from cache DB in last 24h) ===
     with cache_conn.cursor() as cursor:
         cursor.execute("""
             SELECT DISTINCT from_user FROM transactions_cache

@@ -302,7 +302,7 @@ def format_token(token):
     return f"{symbol} ({chain})"
 
 def fetch_home_stats(main_conn, cache_conn):
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     day_ago = now - timedelta(days=1)
 
     results = {
@@ -310,15 +310,19 @@ def fetch_home_stats(main_conn, cache_conn):
         "lifetime": defaultdict(float),
     }
 
-    # === Transactions Cache Queries (Swap Volume, Sends, Transactions, Active Users) ===
     with cache_conn.cursor() as cursor:
+        # === 24h and Lifetime Transactions ===
         for scope, time_filter in [("24h", day_ago), ("lifetime", None)]:
-            cursor.execute(f"""
+            query = """
                 SELECT type, from_user, amount_usd, tx_display
                 FROM transactions_cache
                 WHERE status = 'SUCCESS'
-                {f'AND created_at >= %s' if time_filter else ''}
-            """, (time_filter,) if time_filter else ())
+            """
+            if time_filter:
+                query += " AND created_at >= %s"
+                cursor.execute(query, (time_filter,))
+            else:
+                cursor.execute(query)
 
             users = set()
             for typ, from_user, amount_usd, tx_display in cursor.fetchall():
@@ -337,15 +341,18 @@ def fetch_home_stats(main_conn, cache_conn):
 
             results[scope]["active_users"] = len(users)
 
-        # === Revenue (from timeseries_fees table) ===
+        # === Revenue (fee_usd) directly from transactions_cache ===
         cursor.execute("""
-            SELECT SUM(value) FROM timeseries_fees
-            WHERE date >= %s
-        """, (day_ago.date(),))
+            SELECT SUM(fee_usd) FROM transactions_cache
+            WHERE status = 'SUCCESS' AND created_at >= %s
+        """, (day_ago,))
         rev_24h = cursor.fetchone()[0] or 0
         results["24h"]["revenue"] = float(rev_24h)
 
-        cursor.execute("SELECT SUM(value) FROM timeseries_fees")
+        cursor.execute("""
+            SELECT SUM(fee_usd) FROM transactions_cache
+            WHERE status = 'SUCCESS'
+        """)
         rev_lifetime = cursor.fetchone()[0] or 0
         results["lifetime"]["revenue"] = float(rev_lifetime)
 
@@ -356,9 +363,12 @@ def fetch_home_stats(main_conn, cache_conn):
 
         cursor.execute('SELECT "userId", "createdAt" FROM "User"')
         all_users = cursor.fetchall()
-        new_users = {uid for uid, created in all_users if created >= day_ago}
+        new_users = {
+            uid for uid, created in all_users
+            if (created.replace(tzinfo=timezone.utc) >= day_ago)
+        }
 
-    # === Active Users (from cache DB in last 24h) ===
+    # === Active Users (last 24h) from transaction senders ===
     with cache_conn.cursor() as cursor:
         cursor.execute("""
             SELECT DISTINCT from_user FROM transactions_cache

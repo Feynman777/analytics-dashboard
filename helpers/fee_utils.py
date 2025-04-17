@@ -19,9 +19,15 @@ def fetch_fee_series():
             """)
             rows = cursor.fetchall()
 
+    # Normalize chain ID mapping
+    def normalize_chain_id(chain_id):
+        if chain_id in (101, 1151111081099710):
+            return "solana"
+        return CHAIN_ID_MAP.get(chain_id, str(chain_id))
+
     fee_data = defaultdict(lambda: defaultdict(float))
     for created_date, amount_usd, from_chain_id in rows:
-        chain_name = CHAIN_ID_MAP.get(from_chain_id, str(from_chain_id))
+        chain_name = normalize_chain_id(from_chain_id)
         fee_data[created_date][chain_name] += safe_float(amount_usd)
 
     flattened = []
@@ -36,3 +42,4 @@ def fetch_fee_series():
     df = pd.DataFrame(flattened)
     df["date"] = pd.to_datetime(df["date"])
     return df
+

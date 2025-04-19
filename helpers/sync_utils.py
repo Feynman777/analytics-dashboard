@@ -224,12 +224,12 @@ def sync_transaction_cache(force=False):
 
             cache_conn.commit()
 
-            # Get latest created_at from transactions_cache
-            cur_cache.execute("SELECT MAX(created_at) FROM transactions_cache")
-            latest_ts = cur_cache.fetchone()[0] or now
+            cur_cache.execute("SELECT MAX(created_at) FROM transactions_cache;")
+            latest_ts = cur_cache.fetchone()[0] or datetime.now(timezone.utc)
             update_last_sync(SECTION_KEY, latest_ts)
 
     print(f"✅ Sync complete — {insert_count} rows inserted/updated. Last sync updated to {latest_ts.isoformat()}")
+
 
 
 

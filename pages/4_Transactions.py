@@ -1,3 +1,5 @@
+import json
+import os
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 from st_aggrid import GridOptionsBuilder, AgGrid, GridUpdateMode
@@ -15,6 +17,15 @@ SECTION_KEY = "Transactions"
 
 st.set_page_config(page_title="🔁 Transactions", layout="wide")
 st.title("🔁 Transactions")
+
+def load_fresh_last_sync(section):
+    sync_path = os.path.join(os.getcwd(), "last_sync.json")
+    if os.path.exists(sync_path):
+        with open(sync_path, "r") as f:
+            data = json.load(f)
+            if section in data:
+                return datetime.fromisoformat(data[section])
+    return None
 
 # === Initialize state ===
 if "search_filter" not in st.session_state:
@@ -84,8 +95,11 @@ if "user_profile" in st.session_state and "user_stats" in st.session_state:
             st.write("**🎯 Referrals:**", user["filtered"].get("referrals", 0))
 
 # === Show Last Sync Timestamp Only ===
-last_sync = get_last_sync(SECTION_KEY)
-st.info(f"✅ Last synced at: `{last_sync.strftime('%Y-%m-%d %H:%M')} UTC`")
+last_sync_fresh = load_fresh_last_sync(SECTION_KEY)
+if last_sync_fresh:
+    st.info(f"✅ Last synced at: `{last_sync_fresh.strftime('%Y-%m-%d %H:%M')} UTC`")
+else:
+    st.warning("⚠️ Last sync time not available.")
 
 # === Table Filter Inputs ===
 st.markdown("### 🔎 Filter Transactions Table")

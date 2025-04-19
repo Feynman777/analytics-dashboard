@@ -204,15 +204,15 @@ def upsert_daily_stats(start: datetime, end: datetime = None, conn=None):
     for row in stats:
         day_str = row["date"].isoformat()
         try:
-            referrals_df = fetch_api_metric("referrals", start=day_str, end=day_str)
-            if not referrals_df.empty:
+            referrals_df = fetch_api_metric("user/referrals", start=day_str, end=day_str)
+            if isinstance(referrals_df, pd.DataFrame) and not referrals_df.empty:
                 row["referrals"] = int(referrals_df.iloc[0].get("value", 0))
         except Exception as e:
             print(f"[WARN] Failed to fetch referrals for {day_str}: {e}")
 
         try:
-            agents_df = fetch_api_metric("total_agents", start=day_str, end=day_str)
-            if not agents_df.empty:
+            agents_df = fetch_api_metric("agents/deployed", start=day_str, end=day_str)
+            if isinstance(agents_df, pd.DataFrame) and not agents_df.empty:
                 row["agents_deployed"] = int(agents_df.iloc[0].get("value", 0))
         except Exception as e:
             print(f"[WARN] Failed to fetch agents for {day_str}: {e}")

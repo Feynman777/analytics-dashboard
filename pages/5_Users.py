@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from io import StringIO
 from helpers.connection import get_main_db_connection
+from helpers.connection import get_cache_db_connection
 from utils.charts import user_volume_chart, user_txn_detail_chart
 from helpers.fetch import fetch_top_users_last_7d
 
@@ -14,52 +15,32 @@ top_users = fetch_top_users_last_7d(conn)
 
 def get_user_daily_volume(username):
     try:
-        with get_main_db_connection() as conn:
+        with get_cache_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("""
-                    SELECT A."createdAt", A.transaction
-                    FROM public."Activity" A
-                    JOIN public."User" U ON A."userId" = U."userId"
-                    WHERE A.status = 'SUCCESS' AND A.type = 'SWAP' AND U."username" = %s
+                    SELECT created_at, amount_usd
+                    FROM transactions_cache
+                    WHERE type = 'SWAP' AND status = 'SUCCESS' AND from_user = %s
                 """, (username,))
                 rows = cursor.fetchall()
-                volume_by_day = {}
-                volume_by_timestamp = []
 
-                for created_at, txn_raw in rows:
-                    try:
-                        txn = pd.read_json(StringIO(txn_raw), typ='series')
-                        from_amount = Decimal(txn.get("fromAmount", 0))
-                        decimals = int(txn.get("fromToken", {}).get("decimals", 18))
-                        price_usd = Decimal(txn.get("fromToken", {}).get("tokenPrices", {}).get("usd", 0))
+                if not rows:
+                    return pd.DataFrame(), pd.DataFrame()
 
-                        if from_amount and price_usd:
-                            normalized = from_amount / Decimal(10 ** decimals)
-                            volume = normalized * price_usd
-                            volume = round(float(volume), 2)
-
-                            date_only = created_at.date().isoformat()
-                            volume_by_day[date_only] = float(volume_by_day.get(date_only, 0)) + volume
-
-                            volume_by_timestamp.append({
-                                "datetime": created_at.strftime("%Y-%m-%d %H:%M:%S"),
-                                "volume_usd": float(volume)
-                            })
-                    except Exception as e:
-                        st.warning(f"Skipping txn for {username} on {created_at}: {e}")
-
-                df_day = pd.DataFrame(list(volume_by_day.items()), columns=["date", "daily_volume_usd"])
+                df = pd.DataFrame(rows, columns=["created_at", "amount_usd"])
+                df["date"] = pd.to_datetime(df["created_at"]).dt.date
+                df_day = df.groupby("date")["amount_usd"].sum().reset_index()
+                df_day.columns = ["date", "daily_volume_usd"]
                 df_day["date"] = pd.to_datetime(df_day["date"])
-                df_day = df_day.sort_values("date")
 
-                df_ts = pd.DataFrame(volume_by_timestamp)
-                if not df_ts.empty:
-                    df_ts["datetime"] = pd.to_datetime(df_ts["datetime"])
-                    df_ts = df_ts.sort_values("datetime")
+                df_ts = df[["created_at", "amount_usd"]].copy()
+                df_ts.columns = ["datetime", "volume_usd"]
+                df_ts["datetime"] = pd.to_datetime(df_ts["datetime"])
 
-                return df_day, df_ts
+                return df_day.sort_values("date"), df_ts.sort_values("datetime")
+
     except Exception as e:
-        st.error(f"Database error for {username}: {e}")
+        st.error(f"Error loading user volume: {e}")
         return pd.DataFrame(), pd.DataFrame()
 
 # === Streamlit UI ===

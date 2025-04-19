@@ -49,12 +49,6 @@ except Exception as e:
     print("❌ Error syncing fee series:", e)
 
 try:
-    sync_financials()
-    print("✅ Finished syncing financials")
-except Exception as e:
-    print("❌ Error syncing financials:", e)
-
-try:
     sync_weekly_data()
     print("✅ Finished syncing weekly data")
 except Exception as e:

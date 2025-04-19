@@ -2,7 +2,7 @@ name: 🕒 Cron Sync Job
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # runs every 15 minutes (UTC)
+    - cron: '*/7 * * * *'  # runs every 7 minutes (UTC)
   workflow_dispatch:        # allows manual trigger from GitHub UI
 
 jobs:

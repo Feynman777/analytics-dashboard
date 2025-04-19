@@ -48,28 +48,34 @@ def sync_weekly_data():
 
     print(f"🔁 Running sync_weekly_data from {start_date} to {end_date}")
 
-    # === Sync SWAP volume
-    df_swaps = pd.DataFrame(fetch_swap_series(start=start_date, end=end_date))
-    if not df_swaps.empty:
-        df_swaps["date"] = pd.to_datetime(df_swaps["date"]).dt.date
-        df_swaps["metric"] = "swap_volume"
-        df_swaps["status"] = "success"
-        df_swaps["quantity"] = df_swaps["quantity"].astype(int)
-        upsert_chain_timeseries(df_swaps)
-
     # === Sync API metrics
-    API_METRICS = ["cash_volume", "new_users", "referrals", "total_agents"]
-    for metric in API_METRICS:
+    API_ENDPOINTS = {
+        "cash_volume": "user/cash/volume",
+        "new_users": "user/new",
+        "referrals": "user/referrals",
+        "total_agents": "agents/deployed",
+    }
+
+    for metric, endpoint in API_ENDPOINTS.items():
         rows = []
         for d in pd.date_range(start=start_date, end=end_date):
-            df = fetch_api_metric(metric, d.strftime("%Y-%m-%d"))
+            date_str = d.strftime("%Y-%m-%d")
+            df = fetch_api_metric(endpoint, start=date_str, end=date_str)
+
+            if isinstance(df, dict) or not hasattr(df, "empty"):
+                print(f"[WARN] Skipping {endpoint} — invalid or missing response: {df}")
+                continue
+
             if not df.empty:
-                df["date"] = pd.to_datetime(df["date"]).dt.date
+                if "date" not in df.columns:
+                    df["date"] = d.date()  # Inject known date if missing
                 df["value"] = pd.to_numeric(df["value"], errors="coerce").fillna(0)
                 rows.append(df)
+
         if rows:
-            all_df = pd.concat(rows)
+            all_df = pd.concat(rows, ignore_index=True)
             upsert_timeseries(metric, all_df)
+
 
     update_last_sync(SECTION_KEY, now)
     print(f"✅ Weekly data synced and last_sync.json updated to {now}")

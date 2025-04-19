@@ -7,18 +7,24 @@ from datetime import timedelta, datetime, timezone
 from helpers.fetch import (
     fetch_swap_series,
     fetch_timeseries_chain_volume,
-    fetch_timeseries,
-    fetch_api_metric,
+    fetch_timeseries
 )
 from helpers.upsert import upsert_chain_timeseries, upsert_timeseries
 from utils.charts import metric_section
-from helpers.sync_utils import sync_section
+from helpers.api_utils import fetch_api_metric
 
 # === CONFIG ===
 st.set_page_config(page_title="Weekly Data", layout="wide")
 st.title("📊 Newmoney.AI Weekly Data Dashboard")
 
-API_METRICS = ["cash_volume", "new_users", "referrals", "total_agents"]
+# === Map internal metric names to their actual API endpoints
+API_ENDPOINTS = {
+    "cash_volume": "user/cash/volume",
+    "new_users": "user/new",
+    "referrals": "user/referrals",
+    "total_agents": "agents/deployed"
+}
+
 
 # === CHAIN SELECTION ===
 available_chains = ["base", "arbitrum", "ethereum", "polygon", "avalanche", "mode", "bnb", "sui", "solana", "optimism"]
@@ -43,14 +49,15 @@ def sync_weekly_data(last_sync, now):
         upsert_chain_timeseries(df_swaps)
 
     # === Sync API Metrics
-    for metric in API_METRICS:
+    for metric, endpoint in API_ENDPOINTS.items():
         rows = []
         for d in pd.date_range(start=start_date, end=end_date):
-            df = fetch_api_metric(metric, d.strftime("%Y-%m-%d"))
-            if not df.empty:
+            df = fetch_api_metric(endpoint, start=d.strftime("%Y-%m-%d"), end=d.strftime("%Y-%m-%d"))
+            if isinstance(df, pd.DataFrame) and not df.empty:
                 df["date"] = pd.to_datetime(df["date"]).dt.date
                 df["value"] = pd.to_numeric(df["value"], errors="coerce").fillna(0)
                 rows.append(df)
+
         if rows:
             all_df = pd.concat(rows)
             upsert_timeseries(metric, all_df)

@@ -20,14 +20,13 @@ def show_metric(col, label, value, prefix="", decimals=2):
 
     col.markdown(f"""
         <div style="line-height: 1.2; margin-bottom: 12px;">
-            <div style="font-size: 1.5rem; font-weight: 600;">{label}</div>
-            <div style="font-size: 1.6rem; font-weight: 700; margin-top: 2px;">{formatted}</div>
+            <div style="font-size: 1.5rem; font-weight: 600; color: inherit;">{label}</div>
+            <div style="font-size: 1.6rem; font-weight: 700; margin-top: 2px; color: inherit;">{formatted}</div>
         </div>
     """, unsafe_allow_html=True)
 
-
 # === Clean Section Card ===
-def section_card_manual(title, rows, color="#f9f9f9"):
+def section_card_manual(title, rows, color="transparent"):
     st.markdown(f"""
         <div style="
             background-color:{color};
@@ -43,6 +42,7 @@ def section_card_manual(title, rows, color="#f9f9f9"):
                 margin: 0;
                 padding: 0;
                 line-height: 1.2;
+                color: inherit;
             ">{title}</h3>
     """, unsafe_allow_html=True)
 
@@ -68,7 +68,7 @@ with crypto_col1:
             ("Swap Txns", stats["24h"].get("swap_transactions", 0), {"decimals": 0}),
             ("Send Txns", stats["24h"].get("send_transactions", 0), {"decimals": 0}),
         ]
-    ], color="#e8f5e9")
+    ])
 
 with crypto_col2:
     section_card_manual("Crypto — Lifetime", [
@@ -78,9 +78,8 @@ with crypto_col2:
             ("Swap Txns", stats["lifetime"].get("swap_transactions", 0), {"decimals": 0}),
             ("Send Txns", stats["lifetime"].get("send_transactions", 0), {"decimals": 0}),
         ],
-    ], color="#e8f5e9")
+    ])
 
-# Add spacing between Crypto and Cash sections
 st.markdown("<div style='height: 40px'></div>", unsafe_allow_html=True)
 
 # === CASH ROW ===
@@ -93,7 +92,7 @@ with cash_col1:
             ("Cash Volume", stats["24h"].get("cash_volume", 0), {"prefix": "$"}),
             ("Cash Yield", stats["24h"].get("cash_yield", 0), {"prefix": "$"}),
         ],
-    ], color="#e3f2fd")
+    ])
 
 with cash_col2:
     section_card_manual("Cash — Lifetime", [
@@ -102,9 +101,8 @@ with cash_col2:
             ("Cash Volume", stats["lifetime"].get("cash_volume", 0), {"prefix": "$"}),
             ("Cash Yield", stats["lifetime"].get("cash_yield", 0), {"prefix": "$"}),
         ],
-    ], color="#e3f2fd")
+    ])
 
-# Add spacing between Crypto and Cash sections
 st.markdown("<div style='height: 40px'></div>", unsafe_allow_html=True)
 
 # === USERS ROW ===
@@ -117,7 +115,7 @@ with user_col1:
             ("New Active Users", stats["24h"].get("new_active_users", 0), {"decimals": 0}),
             ("New Users", stats["24h"].get("new_users", 0), {"decimals": 0}),
         ],
-    ], color="#fffde7")
+    ])
 
 with user_col2:
     section_card_manual("Users — Lifetime", [
@@ -125,4 +123,4 @@ with user_col2:
             ("Active Users", stats["lifetime"].get("active_users", 0), {"decimals": 0}),
             ("Total Users", stats["lifetime"].get("total_users", 0), {"decimals": 0}),
         ],
-    ], color="#fffde7")
+    ])

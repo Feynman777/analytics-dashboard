@@ -5,8 +5,8 @@ import pandas as pd
 
 from helpers.fetch import (
     fetch_transactions_filtered,
-    fetch_user_profile_summary,
     fetch_user_metrics_full,
+    fetch_user_profile_summary
 )
 from helpers.connection import get_main_db_connection
 from helpers.sync_utils import get_last_sync

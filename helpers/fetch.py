@@ -668,6 +668,7 @@ def fetch_user_profile_summary(conn, query_input):
         return cursor.fetchone()
    
 def fetch_user_metrics_full(username: str, start: str = None, end: str = None):
+    import json
     result = {
         "profile": {},
         "cash": {},
@@ -677,8 +678,27 @@ def fetch_user_metrics_full(username: str, start: str = None, end: str = None):
     }
 
     try:
-        # === Base Profile and Wallets (still fetched via API) ===
-        full_profile = fetch_api_metric("user_full_metrics", username=username)
+        # === Map endpoints
+        base_profile_url = f"user/metrics/{username}"
+        referrals_url = "user/referrals"
+
+        # === Base Profile and Wallets
+        full_profile_raw = fetch_api_metric(base_profile_url)
+        print("👀 Raw profile response:", full_profile_raw)
+
+        # Convert DataFrame to dict if needed
+        if isinstance(full_profile_raw, pd.DataFrame):
+            if not full_profile_raw.empty:
+                full_profile = full_profile_raw.iloc[0].to_dict()
+            else:
+                full_profile = {}
+        elif isinstance(full_profile_raw, list) and len(full_profile_raw) > 0:
+            full_profile = full_profile_raw[0]
+        else:
+            full_profile = full_profile_raw
+
+        print("✅ Extracted profile dict:", json.dumps(full_profile, indent=2) if full_profile else "None")
+
         if isinstance(full_profile, dict):
             result["cash"] = full_profile.get("cash", {})
             result["crypto"] = full_profile.get("crypto", {})
@@ -690,12 +710,14 @@ def fetch_user_metrics_full(username: str, start: str = None, end: str = None):
                 "btc": full_profile.get("btcAddress"),
                 "sui": full_profile.get("suiAddress"),
             }
+            print("✅ Final profile result['profile']:", result["profile"])
+        else:
+            print("❌ full_profile is not a dict!")
 
-        from_user = username  # Assuming this is the same label used in `transactions_cache`
+        from_user = username
 
         with get_cache_db_connection() as conn:
             with conn.cursor() as cursor:
-                # === Lifetime SWAP volume and quantity
                 cursor.execute("""
                     SELECT COALESCE(SUM(amount_usd), 0), COUNT(*)
                     FROM transactions_cache
@@ -707,13 +729,13 @@ def fetch_user_metrics_full(username: str, start: str = None, end: str = None):
                     "qty": int(qty or 0),
                 }
 
-                # === Lifetime referrals (optional: still fetched via API unless alternative source)
-                referrals_data = fetch_api_metric("referrals", username=username)
+                # Referrals - LIFETIME
+                referrals_data = fetch_api_metric(referrals_url, username=username)
                 if isinstance(referrals_data, pd.DataFrame) and not referrals_data.empty:
                     row = referrals_data.iloc[0]
                     result["lifetime"]["referrals"] = int(row.get("value", 0))
 
-                # === Filtered date-range volume and quantity
+                # === Filtered
                 if start:
                     if not end:
                         end = date.today().strftime("%Y-%m-%d")
@@ -731,7 +753,8 @@ def fetch_user_metrics_full(username: str, start: str = None, end: str = None):
                         "qty": int(qty or 0),
                     }
 
-                    ref_filtered = fetch_api_metric("referrals", username=username, start=start, end=end)
+                    # Referrals - FILTERED
+                    ref_filtered = fetch_api_metric(referrals_url, username=username, start=start, end=end)
                     if isinstance(ref_filtered, pd.DataFrame) and not ref_filtered.empty:
                         row = ref_filtered.iloc[0]
                         result["filtered"]["referrals"] = int(row.get("value", 0))

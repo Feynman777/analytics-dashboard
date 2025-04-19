@@ -1,19 +1,19 @@
-from streamlit import secrets
+import os
 import psycopg2
 
 # === MAIN DB credentials ===
-DB_HOST_db = secrets["database"]["DB_HOST"]
-DB_PORT_db = secrets["database"]["DB_PORT"]
-DB_NAME_db = secrets["database"]["DB_NAME"]
-DB_USER_db = secrets["database"]["DB_USER"]
-DB_PASS_db = secrets["database"]["DB_PASS"]
+DB_HOST_db = os.getenv("DB_HOST")
+DB_PORT_db = os.getenv("DB_PORT")
+DB_NAME_db = os.getenv("DB_NAME")
+DB_USER_db = os.getenv("DB_USER")
+DB_PASS_db = os.getenv("DB_PASS")
 
 # === CACHE DB credentials ===
-DB_HOST_cache = secrets["cache_db"]["DB_HOST"]
-DB_PORT_cache = secrets["cache_db"]["DB_PORT"]
-DB_NAME_cache = secrets["cache_db"]["DB_NAME"]
-DB_USER_cache = secrets["cache_db"]["DB_USER"]
-DB_PASS_cache = secrets["cache_db"]["DB_PASS"]
+DB_HOST_cache = os.getenv("CACHE_DB_HOST")
+DB_PORT_cache = os.getenv("CACHE_DB_PORT")
+DB_NAME_cache = os.getenv("CACHE_DB_NAME")
+DB_USER_cache = os.getenv("CACHE_DB_USER")
+DB_PASS_cache = os.getenv("CACHE_DB_PASS")
 
 def get_cache_db_connection():
     return psycopg2.connect(

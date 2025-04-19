@@ -1,32 +1,64 @@
-# cron_sync.py
+from datetime import datetime
+import os
+
 from helpers.sync_utils import (
-    sync_fee_series,
-    sync_daily_stats,
-    sync_weekly_avg_revenue_metrics,
     sync_transaction_cache,
-    sync_weekly_data,
+    sync_daily_stats,
+    sync_fee_series,
     sync_financials,
+    sync_weekly_data,
 )
+from helpers.connection import get_main_db_connection, get_cache_db_connection
 
-def main():
-    print("=== Railway Cron Sync Started ===")
+# === Start log ===
+print("🔁 Cron sync started at:", datetime.utcnow())
+print("🌐 ENVIRONMENT:", os.getenv("RAILWAY_ENVIRONMENT", "unknown"))
 
-    # Step 1: Pull Activity -> transactions_cache (SWAP, SEND, CASH, DAPP)
+# === Test DB connections ===
+try:
+    conn = get_main_db_connection()
+    print("✅ Connected to MAIN DB")
+    conn.close()
+except Exception as e:
+    print("❌ Failed to connect to MAIN DB:", e)
+
+try:
+    conn = get_cache_db_connection()
+    print("✅ Connected to CACHE DB")
+    conn.close()
+except Exception as e:
+    print("❌ Failed to connect to CACHE DB:", e)
+
+# === Run sync jobs ===
+try:
     sync_transaction_cache()
+    print("✅ Finished syncing transaction cache")
+except Exception as e:
+    print("❌ Error syncing transaction cache:", e)
 
-    # Step 2: Extract swap fee data per chain
-    sync_fee_series()
-
-    # Step 3: Daily stats per chain (transactions, revenue, agents, referrals, etc.)
+try:
     sync_daily_stats()
+    print("✅ Finished syncing daily stats")
+except Exception as e:
+    print("❌ Error syncing daily stats:", e)
 
-    # Step 4: Weekly revenue averages
-    sync_weekly_avg_revenue_metrics()
+try:
+    sync_fee_series()
+    print("✅ Finished syncing fee series")
+except Exception as e:
+    print("❌ Error syncing fee series:", e)
 
-    # Step 5: Weekly data (cash volume, swap quantity, referrals, agents, etc.)
+try:
+    sync_financials()
+    print("✅ Finished syncing financials")
+except Exception as e:
+    print("❌ Error syncing financials:", e)
+
+try:
     sync_weekly_data()
+    print("✅ Finished syncing weekly data")
+except Exception as e:
+    print("❌ Error syncing weekly data:", e)
 
-    print("All sync jobs completed.")
-
-if __name__ == "__main__":
-    main()
+# === End log ===
+print("🎉 Cron sync completed at:", datetime.utcnow())

@@ -1,52 +1,41 @@
-import pandas as pd
+import os
 import requests
-from datetime import datetime, timedelta
-import streamlit as st
+from urllib.parse import urljoin
 
+# === Load base URL and auth key from environment ===
+API_BASE_URL = os.getenv("API_BASE_URL", "https://newmoney-ai-analytics-prod-production.up.railway.app/")
+AUTH_KEY = os.getenv("AUTH_KEY", "dev-default-key")
+
+# === Common request headers ===
 HEADERS = {
-    "Authorization": f"Basic {st.secrets['api']['AUTH_KEY']}"
+    "Authorization": f"Basic {AUTH_KEY}",
+    "Content-Type": "application/json",
 }
-ENDPOINTS = dict(st.secrets["api"])
 
-def fetch_api_metric(key, start=None, end=None, username=None):
-    url = ENDPOINTS[key]
+def fetch_api_metric(metric: str, date: str = None):
+    """
+    Fetch a single-day or full-metric timeseries from the analytics API.
 
-    # Inject username into the URL path if applicable
-    if username and "{username}" not in url:
-        if url.endswith("/"):
-            url += username
-        else:
-            url += f"/{username}"
+    Args:
+        metric (str): e.g., "cash_volume", "referrals", "total_agents"
+        date (str): optional ISO string like '2025-04-15'
 
-    params = {}
-    if start:
-        params["start"] = start
-        if not end:
-            if key == "cash_volume":
-                end = (datetime.strptime(start, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-            else:
-                end = start
-        params["end"] = end
+    Returns:
+        pd.DataFrame: The parsed API response as a dataframe
+    """
+    import pandas as pd
+
+    path = f"timeseries/{metric}"
+    if date:
+        path += f"?date={date}"
+
+    url = urljoin(API_BASE_URL, path)
 
     try:
-        res = requests.get(url, headers=HEADERS, params=params)
-        res.raise_for_status()
-        data = res.json()
-
-        # Handle dict response like {"volume": 208.19, "qty": 13}
-        if isinstance(data, dict):
-            # Special case for full user profile with nested keys
-            if key == "user_full_metrics":
-                return data
-            return pd.DataFrame([{"date": start, **data}])
-
-        # Handle array-style responses
-        elif isinstance(data, list):
-            return pd.DataFrame(data)
-
-        # Catch-all fallback
-        return pd.DataFrame([{"date": start, "value": float(data)}])
-
+        response = requests.get(url, headers=HEADERS)
+        response.raise_for_status()
+        data = response.json()
+        return pd.DataFrame(data)
     except Exception as e:
-        print(f"[ERROR] fetch_api_metric failed: {e}")
-        return pd.DataFrame() 
+        print(f"❌ Failed to fetch {metric}: {e}")
+        return pd.DataFrame()

@@ -95,9 +95,11 @@ if "user_profile" in st.session_state and "user_stats" in st.session_state:
             st.write("**🎯 Referrals:**", user["filtered"].get("referrals", 0))
 
 # === Show Last Sync Timestamp Only ===
-last_sync_fresh = load_fresh_last_sync(SECTION_KEY)
-if last_sync_fresh:
-    st.info(f"✅ Last synced at: `{last_sync_fresh.strftime('%Y-%m-%d %H:%M')} UTC`")
+SECTION_KEY = "Transactions"  # or "Daily_Stats", etc.
+last_sync = get_last_sync(SECTION_KEY)
+
+if last_sync:
+    st.info(f"✅ Last synced at: `{last_sync.strftime('%Y-%m-%d %H:%M')} UTC`")
 else:
     st.warning("⚠️ Last sync time not available.")
 

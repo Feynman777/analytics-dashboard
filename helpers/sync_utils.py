@@ -1,17 +1,26 @@
 import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta, timezone
-import json
-import os
-from helpers.upsert import upsert_transactions_from_activity
-from helpers.connection import get_cache_db_connection, get_main_db_connection
-from helpers.upsert import upsert_fee_series, upsert_weekly_avg_revenue_metrics
-from helpers.constants import CHAIN_ID_MAP
-from utils.transactions import transform_activity_transaction
-from helpers.fee_utils import fetch_fee_series
-from utils.safe_math import safe_float
+import pytz
 
-SYNC_FILE = "last_sync.json"
+from helpers.upsert import (
+    upsert_transactions_from_activity,
+    upsert_fee_series,
+    upsert_weekly_avg_revenue_metrics,
+    upsert_daily_stats,
+    upsert_timeseries,
+    upsert_chain_timeseries
+)
+from helpers.constants import CHAIN_ID_MAP
+from helpers.connection import get_cache_db_connection, get_main_db_connection
+from helpers.fee_utils import fetch_fee_series
+from helpers.fetch import (
+    fetch_avg_revenue_metrics_for_range,
+    fetch_swap_series,
+    fetch_api_metric
+)
+from utils.transactions import transform_activity_transaction
+from utils.safe_math import safe_float
 
 SECTION_DELTA_MAP = {
     "Transactions": timedelta(hours=1),
@@ -19,116 +28,47 @@ SECTION_DELTA_MAP = {
     "Weekly_Data": timedelta(hours=1),
 }
 
-def sync_weekly_avg_revenue_metrics():
-    from helpers.fetch import fetch_avg_revenue_metrics_for_range
-    from helpers.upsert import upsert_weekly_avg_revenue_metrics
+def get_last_sync(section):
+    with get_cache_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sync_state (
+                    section TEXT PRIMARY KEY,
+                    last_sync TIMESTAMPTZ
+                )
+            """)
+            conn.commit()
 
-    print("📆 Syncing weekly average revenue metrics...")
+            cur.execute("SELECT last_sync FROM sync_state WHERE section = %s", (section,))
+            result = cur.fetchone()
+            return result[0] if result else datetime(2024, 1, 1, tzinfo=pytz.UTC)
 
-    today = datetime.now(timezone.utc).date()
-    this_monday = today - timedelta(days=today.weekday())  # start of current week
-    prev_monday = this_monday - timedelta(days=7)          # start of previous week
+def update_last_sync(section, timestamp):
+    with get_cache_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO sync_state (section, last_sync)
+                VALUES (%s, %s)
+                ON CONFLICT (section) DO UPDATE SET last_sync = EXCLUDED.last_sync
+            """, (section, timestamp))
+            conn.commit()
 
-    # Get data for previous and current weeks
-    df = fetch_avg_revenue_metrics_for_range(prev_monday, days=7)
-    upsert_weekly_avg_revenue_metrics(df)
-
-    print(f"✅ Weekly average revenue metrics synced ({prev_monday} to {prev_monday + timedelta(days=7)})")
-
-def sync_weekly_data():
-    from helpers.fetch import fetch_swap_series, fetch_api_metric
-    from helpers.upsert import upsert_chain_timeseries, upsert_timeseries
-    from helpers.sync_utils import get_last_sync, update_last_sync
-
-    SECTION_KEY = "Weekly_Data"
+def sync_section(section_name: str, sync_callback):
     now = datetime.now(timezone.utc)
-    last_sync = get_last_sync(SECTION_KEY).replace(tzinfo=timezone.utc)
-    start_date = (last_sync - timedelta(hours=2)).date()
-    end_date = now.date()
+    last_sync = get_last_sync(section_name)
+    delta = SECTION_DELTA_MAP.get(section_name, timedelta(hours=4))
+    force = False
 
-    print(f"🔁 Running sync_weekly_data from {start_date} to {end_date}")
-
-    # === Sync API metrics
-    API_ENDPOINTS = {
-        "cash_volume": "user/cash/volume",
-        "new_users": "user/new",
-        "referrals": "user/referrals",
-        "total_agents": "agents/deployed",
-    }
-
-    for metric, endpoint in API_ENDPOINTS.items():
-        rows = []
-        for d in pd.date_range(start=start_date, end=end_date):
-            date_str = d.strftime("%Y-%m-%d")
-            df = fetch_api_metric(endpoint, start=date_str, end=date_str)
-
-            if isinstance(df, dict) or not hasattr(df, "empty"):
-                print(f"[WARN] Skipping {endpoint} — invalid or missing response: {df}")
-                continue
-
-            if not df.empty:
-                if "date" not in df.columns:
-                    df["date"] = d.date()  # Inject known date if missing
-                df["value"] = pd.to_numeric(df["value"], errors="coerce").fillna(0)
-                rows.append(df)
-
-        if rows:
-            all_df = pd.concat(rows, ignore_index=True)
-            upsert_timeseries(metric, all_df)
-
-
-    update_last_sync(SECTION_KEY, now)
-    print(f"✅ Weekly data synced and last_sync.json updated to {now}")
-
-def sync_financials():
-    from helpers.upsert import upsert_financials
-    SECTION_KEY = "Financials"
-    now = datetime.now(timezone.utc)
-    start = get_last_sync(SECTION_KEY).replace(tzinfo=timezone.utc)
-
-    print(f"🔁 Running sync_financials from {start} to {now}")
-
-    try:
-        with get_cache_db_connection() as conn:
-            upsert_financials(start=start, end=now, conn=conn)
-            update_last_sync(SECTION_KEY, now)
-            print(f"✅ Financials synced and last_sync.json updated to {now}")
-    except Exception as e:
-        print(f"❌ Error syncing financials: {e}")
-
-
-def sync_daily_stats():
-    from helpers.upsert import upsert_daily_stats
-    SECTION_KEY = "Daily_Stats"
-    now = datetime.now(timezone.utc)
-
-    # Get last sync and round down to midnight UTC
-    last_sync = get_last_sync(SECTION_KEY).replace(tzinfo=timezone.utc)
-    start = last_sync.replace(hour=0, minute=0, second=0, microsecond=0)
-    print(f"🔁 Running sync_daily_stats from {start}")
-
-    try:
-        with get_cache_db_connection() as conn:
-            upsert_daily_stats(start=start, conn=conn)
-            update_last_sync(SECTION_KEY, now)
-            print(f"✅ Daily stats synced and last_sync.json updated to {now}")
-    except Exception as e:
-        print(f"❌ Error syncing daily stats: {e}")
-        update_last_sync(SECTION_KEY, now)
-
-
-def patch_sui_failures_as_success(conn):
-    with conn.cursor() as cursor:
-        cursor.execute("""
-            UPDATE transactions_cache
-            SET status = 'SUCCESS'
-            WHERE from_chain = 'sui'
-              AND status = 'FAIL'
-              AND tx_hash IS NOT NULL
-              AND LENGTH(tx_hash) > 10
-        """)
-        print(f"[PATCH] Corrected {cursor.rowcount} misclassified SUI transactions")
-        conn.commit()
+    if force or (now - last_sync >= delta):
+        with st.spinner(f"Syncing {section_name.replace('_', ' ')} from {last_sync.date()} to {now.date()}..."):
+            try:
+                sync_callback(last_sync, now)
+                update_last_sync(section_name, now)
+                st.success(f"✅ {section_name.replace('_', ' ')} synced successfully.")
+            except Exception as e:
+                st.error(f"❌ Sync failed: {e}")
+    else:
+        st.success(f"✅ Last synced at: `{last_sync.strftime('%Y-%m-%d %H:%M')} UTC`")
 
 def sync_transaction_cache(force=False):
     SECTION_KEY = "Transactions"
@@ -230,61 +170,75 @@ def sync_transaction_cache(force=False):
 
     print(f"✅ Sync complete — {insert_count} rows inserted/updated. Last sync updated to {latest_ts.isoformat()}")
 
+def sync_weekly_avg_revenue_metrics():
+    print("📆 Syncing weekly average revenue metrics...")
 
+    today = datetime.now(timezone.utc).date()
+    this_monday = today - timedelta(days=today.weekday())
+    prev_monday = this_monday - timedelta(days=7)
 
+    df = fetch_avg_revenue_metrics_for_range(prev_monday, days=7)
+    upsert_weekly_avg_revenue_metrics(df)
 
-def get_last_sync(section: str) -> datetime:
-    print(f"🕐 Fetching last sync for: {section}")
-    try:
-        if os.path.exists(SYNC_FILE):
-            with open(SYNC_FILE, "r") as f:
-                data = json.load(f)
-                raw = data.get(section)
-                if raw:
-                    dt = datetime.fromisoformat(raw)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return dt
-    except Exception as e:
-        print(f"❌ Error reading last_sync.json: {e}")
-    return datetime(2024, 1, 1, tzinfo=timezone.utc)
+    print(f"✅ Weekly average revenue metrics synced ({prev_monday} to {prev_monday + timedelta(days=7)})")
 
-def update_last_sync(section: str, sync_datetime: datetime):
-    print(f"💾 Updating last sync for: {section} → {sync_datetime.isoformat()}")
-    print(f"🔍 Sync file path: {os.path.abspath(SYNC_FILE)}")
-    try:
-        data = {}
-        if os.path.exists(SYNC_FILE):
-            with open(SYNC_FILE, "r") as f:
-                data = json.load(f)
-        data[section] = sync_datetime.isoformat()
-        with open(SYNC_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-        print("✅ Sync file updated successfully.")
-    except Exception as e:
-        print(f"❌ Error writing to last_sync.json: {e}")
-
-def sync_section(section_name: str, sync_callback):
+def sync_weekly_data():
+    SECTION_KEY = "Weekly_Data"
     now = datetime.now(timezone.utc)
-    last_sync = get_last_sync(section_name)
-    delta = SECTION_DELTA_MAP.get(section_name, timedelta(hours=4))
-    force = False
+    last_sync = get_last_sync(SECTION_KEY).replace(tzinfo=timezone.utc)
+    start_date = (last_sync - timedelta(hours=2)).date()
+    end_date = now.date()
 
-    if force or (now - last_sync >= delta):
-        with st.spinner(f"Syncing {section_name.replace('_', ' ')} from {last_sync.date()} to {now.date()}..."):
-            try:
-                sync_callback(last_sync, now)
-                update_last_sync(section_name, now)
-                st.success(f"✅ {section_name.replace('_', ' ')} synced successfully.")
-            except Exception as e:
-                st.error(f"❌ Sync failed: {e}")
-    else:
-        st.success(f"✅ Last synced at: `{last_sync.strftime('%Y-%m-%d %H:%M')} UTC`")
+    print(f"🔁 Running sync_weekly_data from {start_date} to {end_date}")
 
+    API_ENDPOINTS = {
+        "cash_volume": "user/cash/volume",
+        "new_users": "user/new",
+        "referrals": "user/referrals",
+        "total_agents": "agents/deployed",
+    }
+
+    for metric, endpoint in API_ENDPOINTS.items():
+        rows = []
+        for d in pd.date_range(start=start_date, end=end_date):
+            date_str = d.strftime("%Y-%m-%d")
+            df = fetch_api_metric(endpoint, start=date_str, end=date_str)
+
+            if isinstance(df, dict) or not hasattr(df, "empty"):
+                print(f"[WARN] Skipping {endpoint} — invalid or missing response: {df}")
+                continue
+
+            if not df.empty:
+                if "date" not in df.columns:
+                    df["date"] = d.date()
+                df["value"] = pd.to_numeric(df["value"], errors="coerce").fillna(0)
+                rows.append(df)
+
+        if rows:
+            all_df = pd.concat(rows, ignore_index=True)
+            upsert_timeseries(metric, all_df)
+
+    update_last_sync(SECTION_KEY, now)
+    print(f"✅ Weekly data synced and last sync updated to {now}")
+
+def sync_daily_stats():
+    SECTION_KEY = "Daily_Stats"
+    now = datetime.now(timezone.utc)
+    last_sync = get_last_sync(SECTION_KEY).replace(tzinfo=timezone.utc)
+    start = last_sync.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    print(f"🔁 Running sync_daily_stats from {start}")
+
+    try:
+        with get_cache_db_connection() as conn:
+            upsert_daily_stats(start=start, conn=conn)
+            update_last_sync(SECTION_KEY, now)
+            print(f"✅ Daily stats synced and last sync updated to {now}")
+    except Exception as e:
+        print(f"❌ Error syncing daily stats: {e}")
+        update_last_sync(SECTION_KEY, now)
 
 def sync_fee_series():
-    from helpers.upsert import upsert_fee_series
-    from helpers.fee_utils import fetch_fee_series  # Make sure you're importing it if it's not local
     SECTION_KEY = "Fee_Series"
     now = datetime.now(timezone.utc)
 
@@ -293,7 +247,7 @@ def sync_fee_series():
 
     try:
         df = fetch_fee_series(start=start)
-        
+
         if df.empty or "date" not in df.columns:
             print("⚠️ No fee data found or missing 'date' column.")
             update_last_sync(SECTION_KEY, now)
@@ -310,3 +264,15 @@ def sync_fee_series():
     except Exception as e:
         print(f"❌ Error syncing fee series: {e}")
 
+def patch_sui_failures_as_success(conn):
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            UPDATE transactions_cache
+            SET status = 'SUCCESS'
+            WHERE from_chain = 'sui'
+              AND status = 'FAIL'
+              AND tx_hash IS NOT NULL
+              AND LENGTH(tx_hash) > 10
+        """)
+        print(f"[PATCH] Corrected {cursor.rowcount} misclassified SUI transactions")
+        conn.commit()

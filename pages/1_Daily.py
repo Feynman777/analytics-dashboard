@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 
-from helpers.fetch import fetch_daily_stats
+from helpers.fetch import fetch_daily_stats, fetch_daily_user_stats
 from utils.charts import daily_metric_section
 
 # === CONFIG ===
@@ -48,3 +48,10 @@ with col7:
     st.altair_chart(daily_metric_section(daily, "Daily Referrals", "Count", col="referrals"), use_container_width=True)
 with col8:
     st.altair_chart(daily_metric_section(daily, "Agents Deployed", "Count", col="agents_deployed"), use_container_width=True)
+
+'''col9, _ = st.columns(2)
+with col9:
+    st.altair_chart(
+        daily_metric_section(daily, "Daily New Active Users", "Users", col="new_active_users"),
+        use_container_width=True
+    )'''

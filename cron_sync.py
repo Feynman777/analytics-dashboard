@@ -5,7 +5,6 @@ from helpers.sync_utils import (
     sync_transaction_cache,
     sync_daily_stats,
     sync_fee_series,
-    sync_financials,
     sync_weekly_data,
 )
 from helpers.connection import get_main_db_connection, get_cache_db_connection

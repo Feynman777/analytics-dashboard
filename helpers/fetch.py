@@ -8,14 +8,74 @@ from collections import defaultdict
 from psycopg2.extras import RealDictCursor
 from helpers.connection import get_cache_db_connection, get_main_db_connection
 from helpers.constants import CHAIN_ID_MAP
-from helpers.upsert import upsert_avg_revenue_metrics
 from utils.transactions import normalize, parse_txn_json
-from helpers.sync_utils import get_last_sync
+from helpers.api_utils import fetch_api_metric
 
-HEADERS = {
-    "Authorization": f"Basic {st.secrets['api']['AUTH_KEY']}"
-}
-ENDPOINTS = dict(st.secrets["api"])
+def fetch_daily_stats(start=None, end=None):
+    with get_cache_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            query = """
+                SELECT
+                    date,
+                    SUM(swap_transactions) AS swap_transactions,
+                    SUM(send_transactions) AS send_transactions,
+                    SUM(cash_transactions) AS cash_transactions,
+                    SUM(dapp_connections) AS dapp_connections,
+                    MAX(referrals) AS referrals,
+                    MAX(agents_deployed) AS agents_deployed,
+                    SUM(swap_volume)::DOUBLE PRECISION AS swap_volume,
+                    SUM(swap_revenue)::DOUBLE PRECISION AS swap_revenue,
+                    SUM(send_volume)::DOUBLE PRECISION AS send_volume,
+                    SUM(cash_volume)::DOUBLE PRECISION AS cash_volume,
+                    SUM(cash_revenue)::DOUBLE PRECISION AS cash_revenue,
+                    SUM(revenue)::DOUBLE PRECISION AS revenue,
+                    MAX(active_users) AS active_users
+                FROM daily_stats
+                WHERE 1=1
+            """
+            params = []
+            if start:
+                query += " AND date >= %s"
+                params.append(start)
+            if end:
+                query += " AND date <= %s"
+                params.append(end)
+
+            query += " GROUP BY date ORDER BY date ASC"
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+
+            # ✅ Auto-infers column names correctly
+            df = pd.DataFrame(rows)
+            df["date"] = pd.to_datetime(df["date"])
+            return df
+
+def fetch_daily_user_stats(start=None, end=None):
+    with get_cache_db_connection() as conn:
+        with conn.cursor() as cursor:
+            query = """
+                SELECT *
+                FROM daily_user_stats
+                WHERE 1=1
+            """
+            params = []
+            if start:
+                query += " AND date >= %s"
+                params.append(start)
+            if end:
+                query += " AND date <= %s"
+                params.append(end)
+
+            query += " ORDER BY date ASC"
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+            df = pd.DataFrame(rows, columns=[
+                "date", "active_swap", "active_send", "active_cash",
+                "total_active", "new", "new_active"
+            ])
+            df["date"] = pd.to_datetime(df["date"])
+            return df
+
 
 def fetch_timeseries(metric, start_date=None, end_date=None):
     try:
@@ -147,50 +207,8 @@ def fetch_swap_series(start=None, end=None):
     except Exception:
         return []
 
-def fetch_api_metric(key, start=None, end=None, username=None):
-    url = ENDPOINTS[key]
-
-    # Inject username into the URL path if applicable
-    if username and "{username}" not in url:
-        if url.endswith("/"):
-            url += username
-        else:
-            url += f"/{username}"
-
-    params = {}
-    if start:
-        params["start"] = start
-        if not end:
-            if key == "cash_volume":
-                end = (datetime.strptime(start, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-            else:
-                end = start
-        params["end"] = end
-
-    try:
-        res = requests.get(url, headers=HEADERS, params=params)
-        res.raise_for_status()
-        data = res.json()
-
-        # Handle dict response like {"volume": 208.19, "qty": 13}
-        if isinstance(data, dict):
-            # Special case for full user profile with nested keys
-            if key == "user_full_metrics":
-                return data
-            return pd.DataFrame([{"date": start, **data}])
-
-        # Handle array-style responses
-        elif isinstance(data, list):
-            return pd.DataFrame(data)
-
-        # Catch-all fallback
-        return pd.DataFrame([{"date": start, "value": float(data)}])
-
-    except Exception as e:
-        print(f"[ERROR] fetch_api_metric failed: {e}")
-        return pd.DataFrame() 
-
 def fetch_avg_revenue_metrics(days: int = 30, snapshot_date: date = None) -> dict:
+    from helpers.upsert import upsert_avg_revenue_metrics
     snapshot_date = snapshot_date or date.today()
 
     with get_main_db_connection() as conn_main, get_cache_db_connection() as conn_cache:
@@ -311,10 +329,9 @@ def fetch_home_stats(main_conn, cache_conn):
     }
 
     with cache_conn.cursor() as cursor:
-        # === 24h and Lifetime Transactions ===
         for scope, time_filter in [("24h", day_ago), ("lifetime", None)]:
             query = """
-                SELECT type, from_user, amount_usd, tx_display
+                SELECT type, from_user, amount_usd, fee_usd, tx_display
                 FROM transactions_cache
                 WHERE status = 'SUCCESS'
             """
@@ -325,38 +342,41 @@ def fetch_home_stats(main_conn, cache_conn):
                 cursor.execute(query)
 
             users = set()
-            for typ, from_user, amount_usd, tx_display in cursor.fetchall():
+            for typ, from_user, amount_usd, fee_usd, tx_display in cursor.fetchall():
                 users.add(from_user)
                 amount = float(amount_usd or 0)
+                fee = float(fee_usd or 0)
 
                 if typ == "SWAP":
                     results[scope]["swap_volume"] += amount
-                    results[scope]["swaps"] += 1
+                    results[scope]["swap_transactions"] += 1
+                    results[scope]["swap_revenue"] += fee
                 elif typ == "SEND":
-                    results[scope]["crypto_sends"] += 1
+                    results[scope]["send_transactions"] += 1
+                    results[scope]["send_volume"] += amount
                 elif typ == "CASH" and tx_display == "SEND":
-                    results[scope]["cash_sends"] += 1
+                    results[scope]["cash_transactions"] += 1
+                    results[scope]["cash_volume"] += amount
+                    results[scope]["cash_revenue"] += fee
 
                 results[scope]["transactions"] += 1
 
             results[scope]["active_users"] = len(users)
 
-        # === Revenue (fee_usd) directly from transactions_cache ===
+        # === Revenue (fallback if not counted above) ===
         cursor.execute("""
             SELECT SUM(fee_usd) FROM transactions_cache
             WHERE status = 'SUCCESS' AND created_at >= %s
         """, (day_ago,))
-        rev_24h = cursor.fetchone()[0] or 0
-        results["24h"]["revenue"] = float(rev_24h)
+        results["24h"]["revenue"] = float(cursor.fetchone()[0] or 0)
 
         cursor.execute("""
             SELECT SUM(fee_usd) FROM transactions_cache
             WHERE status = 'SUCCESS'
         """)
-        rev_lifetime = cursor.fetchone()[0] or 0
-        results["lifetime"]["revenue"] = float(rev_lifetime)
+        results["lifetime"]["revenue"] = float(cursor.fetchone()[0] or 0)
 
-    # === User Table Queries (New Users, Total Users) ===
+    # === User Table Queries ===
     with main_conn.cursor() as cursor:
         cursor.execute('SELECT COUNT(*) FROM "User"')
         results["lifetime"]["total_users"] = cursor.fetchone()[0]
@@ -365,10 +385,9 @@ def fetch_home_stats(main_conn, cache_conn):
         all_users = cursor.fetchall()
         new_users = {
             uid for uid, created in all_users
-            if (created.replace(tzinfo=timezone.utc) >= day_ago)
+            if created.replace(tzinfo=timezone.utc) >= day_ago
         }
 
-    # === Active Users (last 24h) from transaction senders ===
     with cache_conn.cursor() as cursor:
         cursor.execute("""
             SELECT DISTINCT from_user FROM transactions_cache

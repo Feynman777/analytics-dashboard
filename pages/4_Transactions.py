@@ -2,51 +2,41 @@ import streamlit as st
 from datetime import datetime, timedelta, timezone
 from st_aggrid import GridOptionsBuilder, AgGrid, GridUpdateMode
 import pandas as pd
-import json
-import os
+
 from helpers.fetch import (
     fetch_transactions_filtered,
     fetch_user_profile_summary,
     fetch_user_metrics_full,
 )
 from helpers.connection import get_main_db_connection
-from helpers.sync_utils import sync_transaction_cache, get_last_sync
+from helpers.sync_utils import get_last_sync
 
 SECTION_KEY = "Transactions"
 
-st.set_page_config(page_title="Transactions", layout="wide")
-st.title("🔄 Transactions")
-
-# === Reset stuck sync state ===
-if "is_syncing" in st.session_state and not st.session_state.is_syncing:
-    del st.session_state["is_syncing"]
-
-if "sync_timestamp" in st.session_state:
-    if datetime.now(timezone.utc) - st.session_state.sync_timestamp > timedelta(minutes=2):
-        st.session_state.is_syncing = False
-        del st.session_state.sync_timestamp
+st.set_page_config(page_title="🔁 Transactions", layout="wide")
+st.title("🔁 Transactions")
 
 # === Initialize state ===
 if "search_filter" not in st.session_state:
     st.session_state.search_filter = ""
 
 # === User Stats Input ===
-st.markdown("### 📥 User Stats Input")
+st.markdown("### 🧑‍💻 User Stats Input")
 stats_col1, stats_col2 = st.columns([2.5, 2.5])
 with stats_col1:
-    user_input = st.text_input("Search User (for stats) by Username, Email, or Wallet", key="user_stats_input")
+    user_input = st.text_input("🔍 Search User (by Username, Email, or Wallet)", key="user_stats_input")
 with stats_col2:
-    start_date = st.date_input("Start Date Filter", value=datetime(2025, 1, 1).date())
+    start_date = st.date_input("📅 Start Date Filter", value=datetime(2025, 1, 1).date())
 
 # === Load User Stats ===
-if st.button("Load User Stats"):
+if st.button("📊 Load User Stats"):
     with get_main_db_connection() as conn:
         profile = fetch_user_profile_summary(conn, user_input)
 
     if profile:
         resolved_identifier = profile.get("username") or profile.get("email")
         if not resolved_identifier:
-            st.warning("User found, but no valid username or email to query.")
+            st.warning("⚠️ User found, but no valid username or email to query.")
         else:
             metrics = fetch_user_metrics_full(
                 resolved_identifier,
@@ -56,7 +46,7 @@ if st.button("Load User Stats"):
             st.session_state.user_profile = profile
             st.session_state.user_stats = metrics
     else:
-        st.warning("No user found for that input.")
+        st.warning("⚠️ No user found for that input.")
 
 # === Display User Stats (if loaded) ===
 if "user_profile" in st.session_state and "user_stats" in st.session_state:
@@ -64,86 +54,51 @@ if "user_profile" in st.session_state and "user_stats" in st.session_state:
     user = st.session_state.user_stats
 
     if profile and user:
-        st.subheader("📊 User Stats")
+        st.subheader("📈 User Stats")
         username = profile.get("username", "N/A")
         email = profile.get("email", "N/A")
         created_at = profile.get("createdAt", "N/A")
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.markdown("#### General Info")
-            st.write("**Username:**", username)
-            st.write("**Email:**", email)
-            st.write("**Joined:**", created_at)
-            st.write("**EVM Address:**", user["profile"].get("evm", "N/A"))
-            st.write("**Solana Address:**", user["profile"].get("solana", "N/A"))
-            st.write("**Bitcoin Address:**", user["profile"].get("btc", "N/A"))
-            st.write("**Sui Address:**", user["profile"].get("sui", "N/A"))
-            st.write("**Crypto Balance (USD):**", f"${user['crypto'].get('totalBalanceUSD', 0):,.2f}")
+            st.markdown("#### ℹ️ General Info")
+            st.write("**👤 Username:**", username)
+            st.write("**📧 Email:**", email)
+            st.write("**🗓️ Joined:**", created_at)
+            st.write("**🪙 EVM Address:**", user["profile"].get("evm", "N/A"))
+            st.write("**🌞 Solana Address:**", user["profile"].get("solana", "N/A"))
+            st.write("**₿ Bitcoin Address:**", user["profile"].get("btc", "N/A"))
+            st.write("**🌊 Sui Address:**", user["profile"].get("sui", "N/A"))
+            st.write("**💰 Crypto Balance (USD):**", f"${user['crypto'].get('totalBalanceUSD', 0):,.2f}")
             balance = user.get("cash", {}).get("balance") or 0
-            st.write("**Cash Balance (USD):**", f"${float(balance):,.2f}")
+            st.write("**🏦 Cash Balance (USD):**", f"${float(balance):,.2f}")
 
         with col2:
-            st.markdown("#### Lifetime Stats")
-            st.write("**Swap Volume:**", f"${user['lifetime'].get('volume', {}).get('volume', 0):,.2f}")
-            st.write("**Referrals:**", user["lifetime"].get("referrals", 0))
+            st.markdown("#### 📆 Lifetime Stats")
+            st.write("**🔁 Swap Volume:**", f"${user['lifetime'].get('volume', {}).get('volume', 0):,.2f}")
+            st.write("**🎯 Referrals:**", user["lifetime"].get("referrals", 0))
 
         with col3:
-            st.markdown("#### Date-Filtered Stats")
-            st.write("**Swap Volume:**", f"${user['filtered'].get('volume', {}).get('volume', 0):,.2f}")
-            st.write("**Referrals:**", user["filtered"].get("referrals", 0))
+            st.markdown("#### ⏳ Date-Filtered Stats")
+            st.write("**🔁 Swap Volume:**", f"${user['filtered'].get('volume', {}).get('volume', 0):,.2f}")
+            st.write("**🎯 Referrals:**", user["filtered"].get("referrals", 0))
 
-# === Sync Button and Guard ===
-now = datetime.now(timezone.utc)
+# === Show Last Sync Timestamp Only ===
 last_sync = get_last_sync(SECTION_KEY)
-
-if "is_syncing" not in st.session_state:
-    st.session_state.is_syncing = False
-
-if "sync_done_once" not in st.session_state:
-    st.session_state.sync_done_once = False
-
-force = st.button("🔁 Force Sync Transactions Table", key="force_sync_button")
-if force:
-    st.session_state.sync_done_once = False
-
-should_sync = (
-    (force or (now - last_sync >= timedelta(hours=1)))
-    and not st.session_state.is_syncing
-    and not st.session_state.sync_done_once
-)
-
-if should_sync:
-    st.session_state.is_syncing = True
-    st.session_state.sync_timestamp = now
-
-    with st.spinner("Syncing Transactions Cache..."):
-        try:
-            sync_transaction_cache(force=True)
-            st.session_state.sync_done_once = True
-            st.success("✅ Transactions cache synced!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"❌ Sync failed: {e}")
-        finally:
-            st.session_state.is_syncing = False
-else:
-    next_sync = last_sync + timedelta(hours=1)
-    minutes_remaining = max(0, int((next_sync - now).total_seconds() / 60))
-    st.info(f"""
-    ✅ Last synced at: `{last_sync.strftime('%Y-%m-%d %H:%M')} UTC`  
-    ⏳ Next sync in approximately **{minutes_remaining} minutes**.
-    """)
+st.info(f"✅ Last synced at: `{last_sync.strftime('%Y-%m-%d %H:%M')} UTC`")
 
 # === Table Filter Inputs ===
-st.markdown("### 🔍 Filter Transactions Table")
+st.markdown("### 🔎 Filter Transactions Table")
 tf1, tf2 = st.columns([3, 2])
 with tf1:
-    search_input = st.text_input("Filter by Username, Email, or Wallet", value=st.session_state.search_filter, key="txn_filter_input")
+    search_input = st.text_input("🔍 Filter by Username, Email, or Wallet", value=st.session_state.search_filter, key="txn_filter_input")
 with tf2:
-    selected_chains = st.multiselect("Chain Filter", ["base", "arbitrum", "ethereum", "polygon", "avalanche", "mode", "bnb", "sui", "solana", "optimism"])
+    selected_chains = st.multiselect("🪙 Chain Filter", [
+        "base", "arbitrum", "ethereum", "polygon", "avalanche",
+        "mode", "bnb", "sui", "solana", "optimism"
+    ])
 
-if st.button("Apply Table Filter"):
+if st.button("🧹 Apply Table Filter"):
     st.session_state.search_filter = search_input
     st.rerun()
 
@@ -161,11 +116,7 @@ columns = [
     "From Chain", "To Token", "To Chain", "Amount USD", "Tx Hash", "Tx Display"
 ]
 
-if txn_data and len(txn_data[0]) == len(columns):
-    df = pd.DataFrame(txn_data, columns=columns)
-else:
-    df = pd.DataFrame(txn_data)
-
+df = pd.DataFrame(txn_data, columns=columns) if txn_data and len(txn_data[0]) == len(columns) else pd.DataFrame(txn_data)
 if "Tx Display" not in df.columns:
     df["Tx Display"] = ""
 else:
@@ -176,8 +127,6 @@ st.subheader("📋 Transactions Table")
 gb = GridOptionsBuilder.from_dataframe(df)
 gb.configure_pagination(paginationAutoPageSize=True)
 gb.configure_default_column(filter=True, sortable=True, resizable=True)
-
-# ✅ Add this to enable the side bar (column selector, filters, etc.)
 gb.configure_side_bar()
 
 gb.configure_column("Type", filter="agSetColumnFilter")
@@ -199,18 +148,14 @@ AgGrid(
     theme="balham",
     height=600,
     fit_columns_on_grid_load=True,
-
-    # ✅ Optional: Enable full enterprise features
     enable_enterprise_modules=True,
-
-    # ✅ Optional: Allow JS-based features
     allow_unsafe_jscode=True
 )
 
 # === Total Amount USD Summary ===
 if not df.empty and "Amount USD" in df.columns:
     total_usd = df["Amount USD"].sum()
-    st.markdown(f"### 💰 Total Amount USD: **${total_usd:,.2f}**")
+    st.markdown(f"### 💸 Total Amount USD: **${total_usd:,.2f}**")
 
 # === Summary Table ===
 st.markdown("### 📊 Summary of Filtered Transactions")
@@ -241,4 +186,4 @@ if not df.empty:
 
     st.dataframe(summary.style.format({col: "${:,.2f}" for col in summary.columns if "Amt" in col}))
 else:
-    st.info("No transactions to summarize.")
+    st.info("ℹ️ No transactions to summarize.")

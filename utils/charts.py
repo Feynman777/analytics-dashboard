@@ -31,6 +31,32 @@ def week_over_week_change(df, col="value"):
         return None
     return round(((curr - prev) / prev) * 100, 2)
 
+def daily_metric_section(df, title, label, col="value"):
+    if df.empty:
+        st.warning(f"No data for {title}")
+        return None
+    df["date_str"] = df["date"].astype(str)
+    total = df[col].sum()
+    min_val = df[col].min()
+    max_val = df[col].max()
+    
+    st.markdown(f"""
+        <div style="font-size:1.1rem; font-weight:bold; margin-top:20px;">{title}</div>
+        <div style="margin-bottom:6px;">
+            <span>Total: <code>{total:,.2f}</code> | Min: <code>{min_val:,.2f}</code> | Max: <code>{max_val:,.2f}</code></span>
+        </div>
+    """, unsafe_allow_html=True)
+
+    return alt.Chart(df).mark_bar().encode(
+        x=alt.X("date_str:O", title="Date"),
+        y=alt.Y(f"{col}:Q", title=label),
+        tooltip=[
+            alt.Tooltip("date_str:N", title="Date"),
+            alt.Tooltip(f"{col}:Q", title=label, format=",.2f")
+        ]
+    ).properties(height=500)
+
+
 def metric_section(df, title, label, col="value"):
     if df.empty:
         st.warning(f"No data for {title}")

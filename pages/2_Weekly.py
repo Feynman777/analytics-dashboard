@@ -29,10 +29,10 @@ exclude_current_week = st.toggle("🚫 Exclude current (incomplete) week from ch
 
 # === SYNC SECTION WRAPPER ===
 def sync_weekly_data(last_sync, now):
-    start_date = (last_sync - timedelta(hours=2)).date() # number of hours to sync back from timestamp in Weekly
+    start_date = (last_sync - timedelta(hours=2)).date()
     end_date = now.date()
 
-    # === Sync SWAP Volume (from transactions_cache via fetch_swap_series)
+    # === Sync SWAP Volume
     raw_swaps = fetch_swap_series(start=start_date, end=end_date)
     df_swaps = pd.DataFrame(raw_swaps)
     if not df_swaps.empty:
@@ -42,7 +42,7 @@ def sync_weekly_data(last_sync, now):
         df_swaps["quantity"] = df_swaps["quantity"].astype(int)
         upsert_chain_timeseries(df_swaps)
 
-    # === Sync API Metrics (cash_volume, new_users, etc.)
+    # === Sync API Metrics
     for metric in API_METRICS:
         rows = []
         for d in pd.date_range(start=start_date, end=end_date):
@@ -55,28 +55,29 @@ def sync_weekly_data(last_sync, now):
             all_df = pd.concat(rows)
             upsert_timeseries(metric, all_df)
 
-sync_section("Weekly_Data", sync_weekly_data)
-
 # === WEEKLY AGG HELPERS ===
 def load_weekly_df(metric, chains=None, status="success"):
     df = fetch_timeseries_chain_volume(metric=metric, chains=chains, status=status)
-    if df.empty: return pd.DataFrame()
+    if df.empty:
+        return pd.DataFrame()
     df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
     df["week"] = df["date"].dt.to_period("W").apply(lambda r: r.start_time)
     return df.groupby("week")[["value", "quantity"]].sum().reset_index()
 
 def load_weekly_api_df(metric):
     df = fetch_timeseries(metric)
-    if df.empty: return pd.DataFrame()
+    if df.empty:
+        return pd.DataFrame()
     df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
     df["week"] = df["date"].dt.to_period("W").apply(lambda r: r.start_time)
     return df.groupby("week")["value"].sum().reset_index()
 
 def filter_weekly(df):
-    if df.empty: return df
+    if df.empty:
+        return df
     filtered = df[(df["week"] >= start_range) & (df["week"] <= end_range)]
     if exclude_current_week:
-        current_week_start = pd.Timestamp(datetime.now().date()).to_period("W").start_time
+        current_week_start = pd.Timestamp(datetime.now(timezone.utc).date()).to_period("W").start_time
         filtered = filtered[filtered["week"] < current_week_start]
     return filtered
 

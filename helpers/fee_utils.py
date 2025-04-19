@@ -9,17 +9,28 @@ def safe_float(val, default=0.0):
     except (ValueError, TypeError):
         return default
 
-def fetch_fee_series():
+def fetch_fee_series(start=None):
+    from collections import defaultdict
+    from helpers.connection import get_cache_db_connection
+    from helpers.constants import CHAIN_ID_MAP
+    from utils.safe_math import safe_float  # Adjust import if needed
+
+    query = """
+        SELECT DATE(created_at) AS date, fee_usd, from_chain
+        FROM transactions_cache
+        WHERE type = 'SWAP' AND status = 'SUCCESS'
+    """
+    params = []
+
+    if start:
+        query += " AND created_at >= %s"
+        params.append(start)
+
     with get_cache_db_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("""
-                SELECT DATE(created_at) AS date, fee_usd, from_chain
-                FROM transactions_cache
-                WHERE type = 'SWAP' AND status = 'SUCCESS'
-            """)
+            cursor.execute(query, tuple(params))
             rows = cursor.fetchall()
 
-    # Normalize chain ID mapping
     def normalize_chain_id(chain_id):
         if chain_id in (101, 1151111081099710):
             return "solana"
@@ -40,6 +51,6 @@ def fetch_fee_series():
             })
 
     df = pd.DataFrame(flattened)
-    df["date"] = pd.to_datetime(df["date"])
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"])
     return df
-

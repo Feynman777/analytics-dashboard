@@ -133,34 +133,15 @@ def transform_activity_transaction(
     fee_usd = 0
     tx_display = None
 
-
-    # Parse transaction safely
     try:
         txn = json.loads(txn_raw) if isinstance(txn_raw, str) else txn_raw
-    except Exception as e:
-        print(f"❌ Failed to parse txn JSON: {e}")
+    except Exception:
         return None
 
-    # Patch SUI FAILs to SUCCESS — but skip if tx_hash was originally None
-    if typ == "SWAP":
-        print(f"type = {typ}")
-        print("✅ yes - swap")
-        print(f"tx_hash = {tx_hash}")
-        if not tx_hash:
-            print("❌ tx_hash was None originally — skip patching this SUI SWAP")
-        if chain_ids and 2 in chain_ids and status == "FAIL" and tx_hash and not tx_hash.startswith("unknown"):
-            print(f"[PATCH] Corrected SUI txn {tx_hash} from FAIL to SUCCESS")
-            status = "SUCCESS"
-    else:
-        print(f"type = {typ}")
-        print("❌ no - not swap")
-
-    # Chain mapping
     from_chain_id, to_chain_id = get_chain_ids(txn, chain_ids)
     from_chain = CHAIN_ID_MAP.get(from_chain_id, str(from_chain_id))
     to_chain = CHAIN_ID_MAP.get(to_chain_id, str(to_chain_id))
 
-    # === SEND Transaction ===
     if typ == "SEND":
         from_meta = txn.get("fromToken") or txn.get("route", {}).get("fromToken", {}) or txn.get("token", {})
         to_meta = txn.get("toToken") or txn.get("route", {}).get("toToken", {}) or from_meta
@@ -174,13 +155,11 @@ def transform_activity_transaction(
 
         try:
             amount_usd = safe_float(Decimal(amount_raw) * Decimal(price) / Decimal(10 ** decimals))
-        except Exception as e:
-            print(f"[WARN] Failed to compute amount_usd for SEND {tx_hash}: {e}")
+        except Exception:
             amount_usd = 0
 
         to_user = txn.get("toUsername") or txn.get("toUser") or from_user
 
-    # === SWAP or BRIDGE Transaction ===
     elif typ in ("SWAP", "BRIDGE"):
         from_meta = txn.get("fromToken") or txn.get("route", {}).get("fromToken", {})
         to_meta = txn.get("toToken") or txn.get("route", {}).get("toToken", {})
@@ -194,15 +173,14 @@ def transform_activity_transaction(
 
         try:
             amount_usd = safe_float(from_amt * price / Decimal(10 ** decimals))
-        except Exception as e:
-            print(f"[WARN] normalize-like fallback failed in {tx_hash}: {e}")
+        except Exception:
             amount_usd = 0
 
         to_user = from_user
 
-        # === SUI-style fee ===
+        # Parse SUI-style fee
         nm_fee = txn.get("route", {}).get("nmFee", {})
-        if nm_fee and "amount" in nm_fee:
+        if "amount" in nm_fee:
             try:
                 amount = safe_decimal(nm_fee.get("amount"))
                 token = nm_fee.get("token", {})
@@ -210,15 +188,13 @@ def transform_activity_transaction(
                 decimals = int(token.get("decimals", 18))
                 value_usd = safe_float(amount * price_usd / Decimal(10 ** decimals))
                 fee_usd += value_usd
-            except Exception as e:
-                print(f"[WARN] Failed to parse SUI fee for {tx_hash}: {e}")
+            except Exception:
+                pass
 
-        # === LIFI-style steps/fees ===
+        # Parse LIFI-style fees
         steps = txn.get("route", {}).get("steps", [])
         for step in steps:
-            estimate = step.get("estimate", {})
-            fee_costs = estimate.get("feeCosts", [])
-            for fee in fee_costs:
+            for fee in step.get("estimate", {}).get("feeCosts", []):
                 try:
                     amount = safe_decimal(fee.get("amount"))
                     token = fee.get("token", {})
@@ -226,31 +202,39 @@ def transform_activity_transaction(
                     decimals = int(token.get("decimals", 18))
                     value_usd = safe_float(amount * price_usd / Decimal(10 ** decimals))
                     fee_usd += value_usd
-                except Exception as e:
-                    print(f"[WARN] Failed to parse LIFI fee for {tx_hash}: {e}")
+                except Exception:
+                    pass
 
-    # === DAPP Transaction ===
     elif typ == "DAPP":
         tx_display = format_dapp_tx_display(txn_raw)
+        to_user = from_user
 
-    # === CASH Transaction ===
     elif typ == "CASH":
+        if txn.get("subStatus") != "SEND":
+            return None
+
         amount_usd = safe_float(txn.get("amount", 0))
         fee_usd = safe_float(txn.get("fee", 0))
 
         token_meta = txn.get("token", {})
         from_token = to_token = token_meta.get("symbol", "USD")
-        to_user = from_user
 
-    if typ == "SWAP" and chain_ids and 2 in chain_ids:
-        print(f"[SUI SWAP] Final status: {status} | tx_hash: {tx_hash}")
+        to_user_id = txn.get("toUserId")
+        to_user = (
+            resolve_username_by_userid(to_user_id, conn)
+            or txn.get("toUsername")
+            or txn.get("toExternalUser")
+            or to_user_id
+            or "N/A"
+        )
 
-    print(f"[FINAL] {tx_hash} | {typ} | {status} | {amount_usd}")
+    # Generate fallback tx_hash if missing
+    if not tx_hash or str(tx_hash).lower() in ("null", "none"):
+        tx_hash = generate_fallback_tx_hash(created_at, txn)
 
-    # 🚨 FINAL status override for fallback SWAPs
-    if typ == "SWAP" and (not tx_hash or tx_hash.startswith("unknown")):
+    # Mark fallback SWAPs as FAIL
+    if typ == "SWAP" and tx_hash.startswith("unknown"):
         status = "FAIL"
-        print(f"🛡️ OVERRIDE: Enforced FAIL status for fallback SWAP tx_hash={tx_hash}")
 
     return {
         "created_at": created_at,
@@ -269,3 +253,4 @@ def transform_activity_transaction(
         "raw_transaction": txn,
         "tx_display": tx_display,
     }
+

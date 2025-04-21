@@ -1,0 +1,11 @@
+# ruff.toml
+
+target-version = "py39"
+line-length = 100
+
+[lint]
+select = ["E", "F", "B", "I", "UP", "SIM"]
+ignore = ["E501", "F401", "B008"]
+
+[lint.per-file-ignores]
+"__init__.py" = ["F401"]

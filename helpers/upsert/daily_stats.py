@@ -1,12 +1,16 @@
-import pandas as pd
 from datetime import datetime, timedelta
+import pandas as pd
 from psycopg2.extras import execute_values
 from helpers.api_utils import fetch_api_metric
 
 def upsert_daily_stats(start: datetime, end: datetime = None, conn=None):
+    """
+    Processes transaction activity and external metrics to compute per-chain daily statistics.
+    """
     start_date = start.date()
     end_date = (end or datetime.now()).date() + timedelta(days=1)
 
+    # === Load raw transactions ===
     with conn.cursor() as cur:
         cur.execute("""
             SELECT DATE(created_at), from_chain, type, amount_usd, fee_usd, from_user
@@ -18,10 +22,12 @@ def upsert_daily_stats(start: datetime, end: datetime = None, conn=None):
     df = pd.DataFrame(rows, columns=[
         "date", "chain_name", "type", "amount_usd", "fee_usd", "from_user"
     ])
+
     if df.empty:
-        print("✅ No data to process for daily_stats.")
+        print("✅ No transaction data to process for daily_stats.")
         return
 
+    # === Aggregate transaction-based stats ===
     grouped = df.groupby(["date", "chain_name"])
     stats = []
 
@@ -29,47 +35,30 @@ def upsert_daily_stats(start: datetime, end: datetime = None, conn=None):
         row = {
             "date": date,
             "chain_name": chain,
-            "swap_transactions": 0,
-            "swap_volume": 0,
-            "swap_revenue": 0,
-            "send_transactions": 0,
-            "send_volume": 0,
-            "cash_transactions": 0,
-            "cash_volume": 0,
-            "cash_revenue": 0,
-            "dapp_connections": 0,
+            "swap_transactions": (group["type"] == "SWAP").sum(),
+            "swap_volume": group.loc[group["type"] == "SWAP", "amount_usd"].sum(),
+            "swap_revenue": group.loc[group["type"] == "SWAP", "fee_usd"].sum(),
+            "send_transactions": (group["type"] == "SEND").sum(),
+            "send_volume": group.loc[group["type"] == "SEND", "amount_usd"].sum(),
+            "cash_transactions": (group["type"] == "CASH").sum(),
+            "cash_volume": group.loc[group["type"] == "CASH", "amount_usd"].sum(),
+            "cash_revenue": group.loc[group["type"] == "CASH", "fee_usd"].sum(),
+            "dapp_connections": (group["type"] == "DAPP").sum(),
             "referrals": 0,
             "agents_deployed": 0,
             "active_users": group["from_user"].nunique(),
             "revenue": group["fee_usd"].sum(),
         }
 
-        for _, r in group.iterrows():
-            if r["type"] == "SWAP":
-                row["swap_transactions"] += 1
-                row["swap_volume"] += float(r["amount_usd"] or 0)
-                row["swap_revenue"] += float(r["fee_usd"] or 0)
-            elif r["type"] == "SEND":
-                row["send_transactions"] += 1
-                row["send_volume"] += float(r["amount_usd"] or 0)
-            elif r["type"] == "CASH":
-                row["cash_transactions"] += 1
-                row["cash_volume"] += float(r["amount_usd"] or 0)
-                row["cash_revenue"] += float(r["fee_usd"] or 0)
-            elif r["type"] == "DAPP":
-                row["dapp_connections"] += 1
-
-        stats.append(row)
-
-    # === Add referrals and agent deployments from API ===
-    for row in stats:
-        day_str = row["date"].isoformat()
+        # === Enrich with external metrics ===
+        day_str = date.isoformat()
         try:
             refs = fetch_api_metric("user/referrals", start=day_str, end=day_str)
             if not refs.empty:
                 row["referrals"] = int(refs.iloc[0].get("value", 0))
         except Exception:
             pass
+
         try:
             agents = fetch_api_metric("agents/deployed", start=day_str, end=day_str)
             if not agents.empty:
@@ -77,6 +66,13 @@ def upsert_daily_stats(start: datetime, end: datetime = None, conn=None):
         except Exception:
             pass
 
+        stats.append(row)
+
+    if not stats:
+        print("✅ No daily stats to upsert.")
+        return
+
+    # === Upsert into daily_stats ===
     with conn.cursor() as cur:
         execute_values(cur, """
             INSERT INTO daily_stats (
@@ -101,14 +97,16 @@ def upsert_daily_stats(start: datetime, end: datetime = None, conn=None):
                 agents_deployed = EXCLUDED.agents_deployed,
                 active_users = EXCLUDED.active_users,
                 revenue = EXCLUDED.revenue
-        """, [(
-            r["date"], r["chain_name"],
-            r["swap_transactions"], r["swap_volume"], r["swap_revenue"],
-            r["send_transactions"], r["send_volume"],
-            r["cash_transactions"], r["cash_volume"], r["cash_revenue"],
-            r["dapp_connections"], r["referrals"], r["agents_deployed"],
-            r["active_users"], r["revenue"]
-        ) for r in stats])
+        """, [
+            (
+                r["date"], r["chain_name"],
+                r["swap_transactions"], r["swap_volume"], r["swap_revenue"],
+                r["send_transactions"], r["send_volume"],
+                r["cash_transactions"], r["cash_volume"], r["cash_revenue"],
+                r["dapp_connections"], r["referrals"], r["agents_deployed"],
+                r["active_users"], r["revenue"]
+            ) for r in stats
+        ])
         conn.commit()
 
     print(f"✅ Upserted {len(stats)} rows into daily_stats.")

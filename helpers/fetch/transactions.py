@@ -2,8 +2,9 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 
-from helpers.connection import get_cache_db_connection
+from helpers.connection import get_cache_db_connection, get_main_db_connection
 from helpers.utils.transactions import parse_txn_json, normalize, sanitize_username
+from helpers.utils.constants import CHAIN_ID_MAP
 
 
 def fetch_transactions_filtered(
@@ -16,7 +17,8 @@ def fetch_transactions_filtered(
     search_user_or_email=None,
     since_date=None,
     limit=500,
-):
+    username=None,  # <- for backwards compatibility
+) -> pd.DataFrame:
     with get_cache_db_connection() as conn:
         with conn.cursor() as cur:
             query = '''
@@ -28,31 +30,31 @@ def fetch_transactions_filtered(
             '''
             params = []
 
-            if tx_type:
+            if tx_type and tx_type != "All":
                 query += ' AND type = %s'
                 params.append(tx_type)
-
             if min_amount:
                 query += ' AND amount_usd >= %s'
                 params.append(min_amount)
-
             if from_chain:
                 query += ' AND from_chain = %s'
                 params.append(from_chain)
-
             if to_chain:
                 query += ' AND to_chain = %s'
                 params.append(to_chain)
-
             if from_token:
                 query += ' AND from_token = %s'
                 params.append(from_token)
-
             if to_token:
                 query += ' AND to_token = %s'
                 params.append(to_token)
 
-            if search_user_or_email:
+            # Allow both old `username` and new `search_user_or_email`
+            if username:
+                query += ' AND (LOWER(from_user) = %s OR LOWER(to_user) = %s)'
+                username_lower = username.lower()
+                params.extend([username_lower, username_lower])
+            elif search_user_or_email:
                 search_str = f"%{search_user_or_email.lower()}%"
                 query += ' AND (LOWER(from_user) LIKE %s OR LOWER(to_user) LIKE %s)'
                 params.extend([search_str, search_str])
@@ -67,24 +69,21 @@ def fetch_transactions_filtered(
             cur.execute(query, params)
             rows = cur.fetchall()
 
-    sanitized = []
-    for row in rows:
-        row = list(row)
-        row[3] = sanitize_username(row[3])  # from_user
-        row[4] = sanitize_username(row[4])  # to_user
-        sanitized.append(row)
+    cols = [
+        "created_at", "type", "status", "from_user", "to_user",
+        "from_token", "from_chain", "to_token", "to_chain",
+        "amount_usd", "tx_hash", "tx_display"
+    ]
 
-    return sanitized
+    df = pd.DataFrame(rows, columns=cols)
+    df["from_user"] = df["from_user"].apply(sanitize_username)
+    df["to_user"] = df["to_user"].apply(sanitize_username)
+    return df
 
 
-def fetch_recent_transactions(limit=10):
+def fetch_recent_transactions(limit=10) -> list:
     data = []
-
-    from helpers.connection import get_main_db_connection
-    from helpers.utils.constants import CHAIN_ID_MAP
-
     with get_main_db_connection() as conn:
-        user_id_map = {}
         with conn.cursor() as cursor:
             cursor.execute('SELECT "userId", username FROM "User"')
             user_id_map = dict(cursor.fetchall())
@@ -108,7 +107,7 @@ def fetch_recent_transactions(limit=10):
                     or "N/A"
                 )
 
-                to_user = from_user  # default
+                to_user = from_user
                 if typ == "SEND":
                     to_user = txn.get("toUsername") or txn.get("toAddress") or "N/A"
                 elif typ == "CASH":
@@ -142,12 +141,12 @@ def fetch_recent_transactions(limit=10):
     return data
 
 
-def fetch_top_users_last_7d(limit=10):
+def fetch_top_users_last_7d(conn=None, limit=10):
     week_ago = datetime.now(timezone.utc) - timedelta(days=7)
     user_totals = defaultdict(float)
 
-    from helpers.connection import get_main_db_connection
-    with get_main_db_connection() as conn:
+    conn = conn or get_main_db_connection()
+    with conn:
         with conn.cursor() as cursor:
             cursor.execute('''
                 SELECT u.username, a.transaction

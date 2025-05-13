@@ -3,7 +3,6 @@ import hashlib
 from decimal import Decimal
 from helpers.utils.constants import CHAIN_ID_MAP
 
-
 # === General Helpers ===
 def safe_float(val, default=0.0):
     try:
@@ -11,13 +10,11 @@ def safe_float(val, default=0.0):
     except (ValueError, TypeError):
         return default
 
-
 def safe_decimal(val, default=Decimal(0)):
     try:
         return Decimal(str(val))
     except (ValueError, TypeError):
         return default
-
 
 def normalize(amount, price, decimals):
     try:
@@ -25,14 +22,12 @@ def normalize(amount, price, decimals):
     except Exception:
         return 0
 
-
 # === Fallback & Hashing ===
 def generate_fallback_tx_hash(created_at, txn_raw):
     if not isinstance(txn_raw, str):
         txn_raw = str(txn_raw)
-    hash_digest = hashlib.sha256(txn_raw.encode()).hexdigest()[:8]
-    return f"unknown-{created_at.strftime('%Y%m%d%H%M%S')}-{hash_digest}"
-
+    digest = hashlib.sha256(txn_raw.encode()).hexdigest()[:8]
+    return f"unknown-{created_at.strftime('%Y%m%d%H%M%S')}-{digest}"
 
 # === Username Resolution ===
 def resolve_username_by_userid(user_id, conn):
@@ -43,7 +38,6 @@ def resolve_username_by_userid(user_id, conn):
             return row[0] if row and row[0] else user_id
     except Exception:
         return user_id
-
 
 def resolve_username_by_address(address, conn):
     try:
@@ -61,52 +55,37 @@ def resolve_username_by_address(address, conn):
     except Exception:
         return address
 
-
 # === Chain Resolution ===
 def get_chain_ids(txn, activity_chain_ids):
     if isinstance(activity_chain_ids, list):
         if len(activity_chain_ids) == 2:
             return int(activity_chain_ids[0]), int(activity_chain_ids[1])
-        elif len(activity_chain_ids) == 1:
+        if len(activity_chain_ids) == 1:
             return int(activity_chain_ids[0]), int(activity_chain_ids[0])
 
-    chain_id = txn.get("chainId")
-    if chain_id:
-        return int(chain_id), int(chain_id)
-
-    from_id = txn.get("fromChainId") or txn.get("route", {}).get("fromChainId")
-    to_id = txn.get("toChainId") or txn.get("route", {}).get("toChainId")
+    from_id = txn.get("fromChainId") or txn.get("route", {}).get("fromChainId") or txn.get("chainId")
+    to_id = txn.get("toChainId") or txn.get("route", {}).get("toChainId") or from_id
 
     try:
-        from_id = int(from_id)
+        return int(from_id), int(to_id)
     except Exception:
-        from_id = None
-    try:
-        to_id = int(to_id)
-    except Exception:
-        to_id = from_id
-
-    return from_id, to_id
-
+        return None, None
 
 # === DAPP Display ===
 def format_dapp_tx_display(txn_raw):
     try:
         txn = json.loads(txn_raw) if isinstance(txn_raw, str) else txn_raw
-        site_info = txn.get("site", {})
-        host = site_info.get("host", "unknown")
+        host = txn.get("site", {}).get("host", "unknown")
         result_hash = txn.get("result")
 
-        if isinstance(result_hash, str) and result_hash.startswith("0x"):
-            short_hash = result_hash[2:10]
-        else:
-            raw_str = json.dumps(txn, sort_keys=True)
-            short_hash = hashlib.sha256(raw_str.encode()).hexdigest()[:8]
+        short_hash = (
+            result_hash[2:10] if isinstance(result_hash, str) and result_hash.startswith("0x")
+            else hashlib.sha256(json.dumps(txn, sort_keys=True).encode()).hexdigest()[:8]
+        )
 
         return f"{host} - {short_hash}"
     except Exception:
         return "unknown - errorhash"
-
 
 # === Transaction Parser ===
 def parse_txn_json(txn_raw):
@@ -115,28 +94,16 @@ def parse_txn_json(txn_raw):
     except Exception:
         return {}
 
-
 # === Core Transform ===
-def transform_activity_transaction(
-    tx_hash,
-    txn_raw,
-    typ,
-    status,
-    created_at,
-    user_id,
-    conn,
-    chain_ids=None,
-    existing=None
-):
+def transform_activity_transaction(tx_hash, txn_raw, typ, status, created_at, user_id, conn, chain_ids=None, existing=None):
     from_user = resolve_username_by_userid(user_id, conn)
     to_user = None
     from_token = to_token = from_chain = to_chain = None
     amount_usd = fee_usd = 0
     tx_display = None
 
-    try:
-        txn = parse_txn_json(txn_raw)
-    except Exception:
+    txn = parse_txn_json(txn_raw)
+    if not txn:
         return None
 
     from_chain_id, to_chain_id = get_chain_ids(txn, chain_ids)
@@ -144,31 +111,27 @@ def transform_activity_transaction(
     to_chain = CHAIN_ID_MAP.get(to_chain_id, str(to_chain_id))
 
     if typ == "SEND":
-        token_meta = txn.get("fromToken") or txn.get("route", {}).get("fromToken") or txn.get("token", {})
-        from_token = to_token = token_meta.get("symbol")
-
-        amount = txn.get("amount") or 0
-        price = token_meta.get("tokenPrices", {}).get("usd") or token_meta.get("priceUSD") or 1
-        decimals = int(token_meta.get("decimals", 18))
-
-        amount_usd = safe_float(safe_decimal(amount) * safe_decimal(price) / Decimal(10 ** decimals))
+        token = txn.get("fromToken") or txn.get("route", {}).get("fromToken") or txn.get("token", {})
+        from_token = to_token = token.get("symbol")
+        amount = txn.get("amount", 0)
+        price = token.get("tokenPrices", {}).get("usd") or token.get("priceUSD") or 1
+        decimals = int(token.get("decimals", 18))
+        amount_usd = normalize(amount, price, decimals)
         to_user = txn.get("toUsername") or txn.get("toUser") or from_user
 
     elif typ in ("SWAP", "BRIDGE"):
         from_meta = txn.get("fromToken") or txn.get("route", {}).get("fromToken", {})
         to_meta = txn.get("toToken") or txn.get("route", {}).get("toToken", {})
-
         from_token = from_meta.get("symbol")
         to_token = to_meta.get("symbol")
 
-        from_amt = safe_decimal(txn.get("fromAmount", 0))
-        price = safe_decimal(from_meta.get("tokenPrices", {}).get("usd") or from_meta.get("priceUSD") or 0)
+        from_amt = txn.get("fromAmount", 0)
+        price = from_meta.get("tokenPrices", {}).get("usd") or from_meta.get("priceUSD") or 0
         decimals = int(from_meta.get("decimals", 18))
-
-        amount_usd = safe_float(from_amt * price / Decimal(10 ** decimals))
+        amount_usd = normalize(from_amt, price, decimals)
         to_user = from_user
 
-        # === SUI-style fee ===
+        # SUI fee format
         sui_fee = txn.get("route", {}).get("nmFee", {})
         if "amount" in sui_fee:
             try:
@@ -180,9 +143,8 @@ def transform_activity_transaction(
             except Exception:
                 pass
 
-        # === LIFI-style fees ===
-        steps = txn.get("route", {}).get("steps", [])
-        for step in steps:
+        # LIFI fee format
+        for step in txn.get("route", {}).get("steps", []):
             for fee in step.get("estimate", {}).get("feeCosts", []):
                 try:
                     amt = safe_decimal(fee["amount"])
@@ -200,12 +162,10 @@ def transform_activity_transaction(
     elif typ == "CASH":
         if txn.get("subStatus") != "SEND":
             return None
-
         amount_usd = safe_float(txn.get("amount", 0))
         fee_usd = safe_float(txn.get("fee", 0))
-        token_meta = txn.get("token", {})
-        from_token = to_token = token_meta.get("symbol", "USD")
-
+        token = txn.get("token", {})
+        from_token = to_token = token.get("symbol", "USD")
         to_user_id = txn.get("toUserId")
         to_user = (
             resolve_username_by_userid(to_user_id, conn)
@@ -215,9 +175,11 @@ def transform_activity_transaction(
             or "N/A"
         )
 
+    # Fallback tx_hash if missing
     if not tx_hash or str(tx_hash).lower() in ("null", "none"):
         tx_hash = generate_fallback_tx_hash(created_at, txn)
 
+    # Never falsely promote unknown SWAP tx_hashes to success
     if typ == "SWAP" and tx_hash.startswith("unknown"):
         status = "FAIL"
 
@@ -235,6 +197,11 @@ def transform_activity_transaction(
         "fee_usd": round(fee_usd, 8),
         "chain_id": from_chain_id,
         "tx_hash": tx_hash,
-        "raw_transaction": txn,
         "tx_display": tx_display,
     }
+
+def sanitize_username(username):
+    """Returns a safe fallback username if value is None, null, or invalid."""
+    if not username or str(username).lower() in ("none", "null", "nan"):
+        return "unknown"
+    return str(username).strip()

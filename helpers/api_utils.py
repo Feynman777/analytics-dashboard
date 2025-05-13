@@ -10,6 +10,17 @@ headers = {
     "Authorization": f"Basic {AUTH_KEY}"
 }
 
+def fetch_api_raw(endpoint: str, params: dict = None) -> str:
+    base = API_BASE_URL if API_BASE_URL.endswith("/") else API_BASE_URL + "/"
+    url = urljoin(base, endpoint)
+
+    try:
+        response = requests.get(url, headers=headers, params=params or {})
+        response.raise_for_status()
+        return response.text  # raw number or plain string
+    except Exception as e:
+        print(f"❌ API RAW fetch failed: {e}\n↳ URL: {url} | Params: {params}")
+        return "0"
 
 def fetch_api_metric(endpoint: str, start: str = None, end: str = None, username: str = None) -> pd.DataFrame:
     base = API_BASE_URL if API_BASE_URL.endswith("/") else API_BASE_URL + "/"
@@ -41,3 +52,16 @@ def fetch_api_metric(endpoint: str, start: str = None, end: str = None, username
     except Exception as e:
         print(f"❌ API fetch failed: {e}\n↳ URL: {url} | Params: {params}")
         return pd.DataFrame()
+    
+
+def fetch_api_json(endpoint: str, params: dict = None) -> dict:
+    base = API_BASE_URL if API_BASE_URL.endswith("/") else API_BASE_URL + "/"
+    url = urljoin(base, endpoint)
+
+    try:
+        response = requests.get(url, headers=headers, params=params or {})
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"❌ API JSON fetch failed: {e}\n↳ URL: {url} | Params: {params}")
+        return {}

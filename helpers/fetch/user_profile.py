@@ -1,9 +1,13 @@
 from datetime import datetime
-from helpers.api_utils import fetch_api_metric
+import pandas as pd
+from helpers.api_utils import fetch_api_metric, fetch_api_json, fetch_api_raw
 from helpers.connection import get_main_db_connection
 
-
-def fetch_user_profile_summary(conn, identifier: str):
+def fetch_user_profile_summary(conn, identifier: str) -> dict | None:
+    """
+    Attempts to match user by username, email, or wallet address.
+    Returns basic profile metadata if found.
+    """
     with conn.cursor() as cur:
         cur.execute("""
             SELECT u."userId", u.username, u.email, u."createdAt"
@@ -18,59 +22,77 @@ def fetch_user_profile_summary(conn, identifier: str):
             LIMIT 1
         """, (identifier, identifier, identifier))
         row = cur.fetchone()
-        if not row:
-            return None
-        return {
-            "userId": row[0],
-            "username": row[1],
-            "email": row[2],
-            "createdAt": row[3]
-        }
+
+    if not row:
+        return None
+
+    return {
+        "userId": row[0],
+        "username": row[1],
+        "email": row[2],
+        "createdAt": row[3],
+    }
 
 
-def fetch_user_metrics_full(user_identifier: str, start=None, end=None):
+def fetch_user_metrics_full(user_identifier: str, start: str = None, end: str = None) -> dict:
     if not user_identifier:
         return {}
 
-    # Fetch user wallet addresses
+    # === Wallet Addresses ===
     with get_main_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
-                    MAX(CASE WHEN chain = 'evm' THEN w.address ELSE NULL END) AS evm,
-                    MAX(CASE WHEN chain = 'solana' THEN w.address ELSE NULL END) AS solana,
-                    MAX(CASE WHEN chain = 'btc' THEN w.address ELSE NULL END) AS btc,
-                    MAX(CASE WHEN chain = 'sui' THEN w.address ELSE NULL END) AS sui
+                    MAX(CASE WHEN "chainType" = 'ETHEREUM' THEN w.address END) as evm,
+                    MAX(CASE WHEN "chainType" = 'SOLANA' THEN w.address END) as solana,
+                    MAX(CASE WHEN "chainType" = 'BITCOIN' THEN w.address END) as btc,
+                    MAX(CASE WHEN "chainType" = 'SUI' THEN w.address END) as sui
                 FROM "Wallet" w
                 JOIN "WalletAccount" wa ON w."walletAccountId" = wa."id"
                 JOIN "User" u ON wa."userId" = u."userId"
                 WHERE LOWER(u.username) = LOWER(%s) OR LOWER(u.email) = LOWER(%s)
             """, (user_identifier, user_identifier))
             row = cur.fetchone()
-            wallets = {
-                "evm": row[0],
-                "solana": row[1],
-                "btc": row[2],
-                "sui": row[3]
-            }
+            wallets = dict(zip(["evm", "solana", "btc", "sui"], row or [None] * 4))
 
-    # Fetch API-based metrics
-    cash = fetch_api_metric("user/metrics/cash", username=user_identifier)
-    volume_all = fetch_api_metric("user/metrics/volume", username=user_identifier)
-    refs_all = fetch_api_metric("user/referrals", username=user_identifier)
+    # === Full profile ===
+    try:
+        df = fetch_api_metric(f"user/metrics/{user_identifier}")
+        if df.empty:
+            return {"profile": wallets}
+        metrics = df.iloc[0].to_dict()
+    except Exception as e:
+        print(f"❌ Failed to fetch full metrics: {e}")
+        return {"profile": wallets}
 
-    volume_filtered = fetch_api_metric("user/metrics/volume", username=user_identifier, start=start, end=end)
-    refs_filtered = fetch_api_metric("user/referrals", username=user_identifier, start=start, end=end)
+    # === Filtered volume (dict from JSON) ===
+    def fetch_filtered_volume():
+        url = f"user/metrics/volume/{user_identifier}?start={start}" if start else f"user/metrics/volume/{user_identifier}"
+        try:
+            return fetch_api_json(url)
+        except Exception as e:
+            print(f"❌ Error fetching filtered volume: {e}")
+            return {}
+
+    # === Filtered referrals (raw integer) ===
+    def fetch_filtered_referrals():
+        url = f"user/referrals/{user_identifier}?start={start}" if start else f"user/referrals/{user_identifier}"
+        try:
+            return int(fetch_api_raw(url))
+        except Exception as e:
+            print(f"❌ Error fetching filtered referrals: {e}")
+            return 0
 
     return {
         "profile": wallets,
-        "cash": cash.iloc[0].to_dict() if not cash.empty else {},
+        "cash": metrics.get("cash", {}),
+        "crypto": metrics.get("crypto", {}),
         "lifetime": {
-            "volume": volume_all.iloc[0].to_dict() if not volume_all.empty else {},
-            "referrals": int(refs_all.iloc[0]["value"]) if not refs_all.empty else 0,
+            "volume": metrics.get("crypto", {}).get("swaps", {}),
+            "referrals": metrics.get("referrals", 0),
         },
         "filtered": {
-            "volume": volume_filtered.iloc[0].to_dict() if not volume_filtered.empty else {},
-            "referrals": int(refs_filtered.iloc[0]["value"]) if not refs_filtered.empty else 0,
+            "volume": fetch_filtered_volume(),
+            "referrals": fetch_filtered_referrals(),
         }
     }

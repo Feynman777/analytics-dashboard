@@ -12,42 +12,50 @@ def fetch_home_stats(main_conn: connection, cache_conn: connection) -> dict:
         "lifetime": defaultdict(float),
     }
 
+    def fetch_transactions(scope: str, since: datetime = None):
+        query = """
+            SELECT type, from_user, amount_usd, fee_usd, tx_display
+            FROM transactions_cache
+            WHERE status = 'SUCCESS'
+        """
+        params = []
+        if since:
+            query += " AND created_at >= %s"
+            params.append(since)
+
+        with cache_conn.cursor() as cursor:
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+
+        user_set = set()
+        for typ, from_user, amount_usd, fee_usd, tx_display in rows:
+            user_set.add(from_user)
+            amount = float(amount_usd or 0)
+            fee = float(fee_usd or 0)
+            tx_display = tx_display or ""
+
+            if typ == "SWAP":
+                results[scope]["swap_volume"] += amount
+                results[scope]["swap_transactions"] += 1
+                results[scope]["swap_revenue"] += fee
+            elif typ == "SEND":
+                results[scope]["send_transactions"] += 1
+                results[scope]["send_volume"] += amount
+            elif typ == "CASH" and tx_display == "SEND":
+                results[scope]["cash_transactions"] += 1
+                results[scope]["cash_volume"] += amount
+                results[scope]["cash_revenue"] += fee
+
+            results[scope]["transactions"] += 1
+
+        results[scope]["active_users"] = len(user_set)
+
+    # === Fetch transaction aggregates
+    fetch_transactions("24h", day_ago)
+    fetch_transactions("lifetime")
+
+    # === Revenue fallback (ensure key is present even if SWAP parsing missed it)
     with cache_conn.cursor() as cursor:
-        for scope, time_filter in [("24h", day_ago), ("lifetime", None)]:
-            query = """
-                SELECT type, from_user, amount_usd, fee_usd, tx_display
-                FROM transactions_cache
-                WHERE status = 'SUCCESS'
-            """
-            if time_filter:
-                query += " AND created_at >= %s"
-                cursor.execute(query, (time_filter,))
-            else:
-                cursor.execute(query)
-
-            users = set()
-            for typ, from_user, amount_usd, fee_usd, tx_display in cursor.fetchall():
-                users.add(from_user)
-                amount = float(amount_usd or 0)
-                fee = float(fee_usd or 0)
-
-                if typ == "SWAP":
-                    results[scope]["swap_volume"] += amount
-                    results[scope]["swap_transactions"] += 1
-                    results[scope]["swap_revenue"] += fee
-                elif typ == "SEND":
-                    results[scope]["send_transactions"] += 1
-                    results[scope]["send_volume"] += amount
-                elif typ == "CASH" and tx_display == "SEND":
-                    results[scope]["cash_transactions"] += 1
-                    results[scope]["cash_volume"] += amount
-                    results[scope]["cash_revenue"] += fee
-
-                results[scope]["transactions"] += 1
-
-            results[scope]["active_users"] = len(users)
-
-        # === Revenue fallback ===
         cursor.execute("""
             SELECT SUM(fee_usd) FROM transactions_cache
             WHERE status = 'SUCCESS' AND created_at >= %s
@@ -60,7 +68,7 @@ def fetch_home_stats(main_conn: connection, cache_conn: connection) -> dict:
         """)
         results["lifetime"]["revenue"] = float(cursor.fetchone()[0] or 0)
 
-    # === Users (Main DB) ===
+    # === User counts from main DB
     with main_conn.cursor() as cursor:
         cursor.execute('SELECT COUNT(*) FROM "User"')
         results["lifetime"]["total_users"] = cursor.fetchone()[0]
@@ -72,6 +80,7 @@ def fetch_home_stats(main_conn: connection, cache_conn: connection) -> dict:
             if created.replace(tzinfo=timezone.utc) >= day_ago
         }
 
+    # === Active 24h users (from cache)
     with cache_conn.cursor() as cursor:
         cursor.execute("""
             SELECT DISTINCT from_user FROM transactions_cache

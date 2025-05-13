@@ -1,12 +1,12 @@
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 
-from helpers.fetch import fetch_daily_stats
-from charts.financials import daily_metric_section
+from helpers.fetch.daily import fetch_daily_stats
+from helpers.utils.charts import daily_metric_section
 
 # === CONFIG ===
 st.set_page_config(page_title="Daily Stats Dashboard", layout="wide")
-st.title("📊 Newmoney.AI Daily Stats Dashboard")
+st.title("📊 Daily Stats")
 
 # === DATE RANGE ===
 st.subheader("📅 Select date range:")

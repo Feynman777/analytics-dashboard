@@ -8,6 +8,7 @@ def upsert_daily_user_stats(start: datetime, conn):
     start_date = start.date()
     end_date = datetime.utcnow().date() + timedelta(days=1)
 
+    # === Load all known users (username + createdAt) ===
     with get_main_db_connection() as main_conn:
         with main_conn.cursor() as cur:
             cur.execute('SELECT "userId", username, "createdAt" FROM "User"')
@@ -22,6 +23,7 @@ def upsert_daily_user_stats(start: datetime, conn):
         for user_id, username, _ in all_users if username
     }
 
+    # === Load all previously active users before this date ===
     with conn.cursor() as cur:
         cur.execute("""
             SELECT DISTINCT from_user
@@ -35,9 +37,10 @@ def upsert_daily_user_stats(start: datetime, conn):
             username_to_userId[u] for u in past_active_usernames if u in username_to_userId
         }
 
+    # === Load transaction activity during the target range ===
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT DATE(created_at) AS date, type, from_user
+            SELECT DATE(created_at), type, from_user
             FROM transactions_cache
             WHERE status = 'SUCCESS'
               AND type IN ('SWAP', 'SEND', 'CASH')
@@ -45,6 +48,7 @@ def upsert_daily_user_stats(start: datetime, conn):
         """, (start_date, end_date))
         rows = cur.fetchall()
 
+    # === Aggregate user activity by type and day ===
     daily_users = defaultdict(lambda: {"swap": set(), "send": set(), "cash": set()})
 
     for txn_date, typ, from_user in rows:
@@ -55,15 +59,18 @@ def upsert_daily_user_stats(start: datetime, conn):
             continue
         daily_users[txn_date][typ.lower()].add(user_id)
 
+    # === Build upsert rows ===
     rows_to_upsert = []
     for day in sorted(daily_users.keys()):
         swap_users = daily_users[day]["swap"]
         send_users = daily_users[day]["send"]
         cash_users = daily_users[day]["cash"]
+
         active_user_ids = swap_users | send_users | cash_users
         new_active_users = active_user_ids - past_active_userIds
-        past_active_userIds.update(active_user_ids)
         new_users = {uid for uid, created in user_created_map.items() if created == day}
+
+        past_active_userIds.update(active_user_ids)
 
         rows_to_upsert.append((
             day,
@@ -72,13 +79,14 @@ def upsert_daily_user_stats(start: datetime, conn):
             len(cash_users),
             len(active_user_ids),
             len(new_users),
-            len(new_active_users)
+            len(new_active_users),
         ))
 
     if not rows_to_upsert:
         print("✅ No daily user stats to upsert.")
         return
 
+    # === Upsert into `daily_user_stats` ===
     with conn.cursor() as cur:
         execute_values(cur, """
             INSERT INTO daily_user_stats (

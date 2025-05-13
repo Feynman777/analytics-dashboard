@@ -9,6 +9,7 @@ stats = fetch_home_stats(conn_main, conn_cache)
 conn_main.close()
 conn_cache.close()
 
+
 # === Metric Display Helper ===
 def show_metric(col, label, value, prefix="", decimals=2):
     if isinstance(value, float):

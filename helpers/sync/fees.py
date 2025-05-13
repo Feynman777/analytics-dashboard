@@ -1,8 +1,6 @@
 from datetime import datetime, timezone
-
-from helpers.upsert.fees import upsert_fee_series
-from helpers.fetch.fees import fetch_fee_series
-from helpers.sync_utils.core import get_last_sync, update_last_sync
+from helpers.fetch.fee_data import fetch_fee_series
+from helpers.utils.sync_state import get_last_sync, update_last_sync
 
 SECTION_KEY = "Fee_Series"
 
@@ -20,10 +18,9 @@ def sync_fee_series():
             update_last_sync(SECTION_KEY, now)
             return
 
-        print(f"📊 Found {len(df)} fee records to upsert (from {df['date'].min()} to {df['date'].max()})")
-        for i in range(0, len(df), 100):
-            print(f"  ⏳ Upserting batch {i} → {min(i+100, len(df))}")
-            upsert_fee_series(df.iloc[i:i+100])
+        print(f"📊 Found {len(df)} fee records (from {df['date'].min()} to {df['date'].max()})")
+        # No upsert step — display summary only
+        print(df.head())
 
         update_last_sync(SECTION_KEY, now)
         print(f"✅ Fee series sync complete. Last sync updated to {now.isoformat()}")

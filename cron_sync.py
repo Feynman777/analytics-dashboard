@@ -1,10 +1,14 @@
+# === cron_sync.py ===
+
 from datetime import datetime
 import os
 
 from helpers.sync.transactions import sync_transaction_cache
-from helpers.sync.daily import sync_daily_stats
+from helpers.sync.daily_stats import sync_daily_stats
 from helpers.sync.fees import sync_fee_series
-from helpers.sync.weekly import sync_weekly_data
+from helpers.sync.weekly_data import sync_weekly_data
+from helpers.sync.weekly_data import sync_weekly_avg_revenue_metrics
+from helpers.upsert.weekly_stats import upsert_weekly_swap_revenue  # ✅ NEW
 from helpers.connection import get_main_db_connection, get_cache_db_connection
 
 # === Start log ===
@@ -32,5 +36,20 @@ for label, fn in [
         print(f"✅ Finished syncing {label}")
     except Exception as e:
         print(f"❌ Error syncing {label}:", e)
+
+# === Sync weekly swap revenue ===
+try:
+    with get_cache_db_connection() as conn:
+        upsert_weekly_swap_revenue(conn)
+    print("✅ Finished syncing weekly swap revenue")
+except Exception as e:
+    print("❌ Error syncing weekly swap revenue:", e)
+
+# === Sync weekly avg revenue per active user ===
+try:
+    sync_weekly_avg_revenue_metrics()
+    print("✅ Finished syncing weekly avg revenue metrics")
+except Exception as e:
+    print("❌ Error syncing weekly avg revenue metrics:", e)
 
 print("🎉 Cron sync completed at:", datetime.utcnow())

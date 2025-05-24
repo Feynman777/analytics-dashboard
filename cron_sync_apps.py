@@ -18,8 +18,7 @@ if __name__ == "__main__":
     print("✅ Starting cron_sync_apps.py...")
     print("🔐 GOOGLE_APPLICATION_CREDENTIALS =", os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
 
-    start_time = datetime.utcnow() - timedelta(days=1)
-    df = fetch_daily_installs_from_bigquery(start=start_time)
+    df = fetch_daily_installs_from_bigquery()
     if df.empty:
         print("⚠️ No data returned from BigQuery.")
     else:

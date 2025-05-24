@@ -1,32 +1,36 @@
 from google.cloud import bigquery
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_values
 from helpers.connection import get_cache_db_connection
 
-def fetch_daily_installs_from_bigquery(start: datetime = None) -> pd.DataFrame:
+# Set default start date to 3 days ago
+DEFAULT_START_DATE = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
+
+def fetch_daily_installs_from_bigquery(start_date=DEFAULT_START_DATE) -> pd.DataFrame:
     client = bigquery.Client()
-    if not start:
-        start = datetime.utcnow() - timedelta(days=1)
 
     query = f"""
         SELECT
-            DATE(TIMESTAMP_MICROS(event_timestamp)) AS date,
-            COUNT(*) AS installs,
-            ARRAY_AGG(DISTINCT platform) AS os_types,
-            ARRAY_AGG(DISTINCT geo.country) AS countries,
-            ARRAY_AGG(DISTINCT traffic_source.source) AS sources
-        FROM `mobile-app-df5c3.analytics_489350194.events_*`
-        WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 15 DAY))
-                                AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
-          AND event_name = 'first_open'
-          AND TIMESTAMP_MICROS(event_timestamp) >= TIMESTAMP('{start.strftime('%Y-%m-%d %H:%M:%S')}')
-        GROUP BY date
-        ORDER BY date DESC
+            event_date,
+            COUNT(DISTINCT user_pseudo_id) AS installs,
+            ARRAY_AGG(DISTINCT device.operating_system IGNORE NULLS) AS os_types,
+            ARRAY_AGG(DISTINCT geo.country IGNORE NULLS) AS countries
+        FROM
+            `mobile-app-df5c3.analytics_489350194.events_*`
+        WHERE
+            _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE("{start_date}"))
+                             AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
+            AND event_name = 'first_open'
+        GROUP BY event_date
+        ORDER BY event_date
     """
 
-    return client.query(query).to_dataframe()
+    result = client.query(query).to_dataframe()
+    result["source"] = "firebase"
+    result["event_date"] = pd.to_datetime(result["event_date"]).dt.date
+    return result.rename(columns={"event_date": "date"})
 
 def upsert_daily_app_downloads(df):
     records = [

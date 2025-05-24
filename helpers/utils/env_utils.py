@@ -6,15 +6,15 @@ except ImportError:
     secrets = None
 
 def get_env_or_secret(key, section=None, default=None):
-    # Try environment variable first
-    if os.getenv(key):
-        return os.getenv(key)
+    # Prefer env variable first (with section prefix if applicable)
+    env_key = f"{section.upper()}_{key}" if section else key
+    if os.getenv(env_key):
+        return os.getenv(env_key)
 
-    # Then try Streamlit secrets
+    # Fall back to streamlit secrets (if running in Streamlit)
     if secrets:
         if section:
             return secrets.get(section, {}).get(key, default)
         return secrets.get(key, default)
 
-    # Fallback to provided default
     return default

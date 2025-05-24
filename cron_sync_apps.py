@@ -2,6 +2,7 @@
 import os
 import base64
 import pandas as pd
+from datetime import datetime, timedelta
 from helpers.upsert.daily_app_downloads import upsert_daily_app_downloads
 from helpers.upsert.daily_app_downloads import fetch_daily_installs_from_bigquery
 from helpers.connection_direct import get_direct_cache_connection  # 👈 use direct method
@@ -17,7 +18,8 @@ if __name__ == "__main__":
     print("✅ Starting cron_sync_apps.py...")
     print("🔐 GOOGLE_APPLICATION_CREDENTIALS =", os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
 
-    df = fetch_daily_installs_from_bigquery(start="2025-05-20")
+    start_time = datetime.utcnow() - timedelta(days=1)
+    df = fetch_daily_installs_from_bigquery(start=start_time)
     if df.empty:
         print("⚠️ No data returned from BigQuery.")
     else:

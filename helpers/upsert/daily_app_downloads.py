@@ -1,31 +1,33 @@
 from google.cloud import bigquery
-from datetime import date
+from datetime import date, datetime
 import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_values
 from helpers.connection import get_cache_db_connection
 
-def fetch_daily_installs_from_bigquery(start_date="2025-05-20"):
+def fetch_daily_installs_from_bigquery(start: datetime = None) -> pd.DataFrame:
     client = bigquery.Client()
+    if not start:
+        start = datetime.utcnow() - timedelta(days=1)
+
     query = f"""
         SELECT
-            event_date,
-            COUNT(DISTINCT user_pseudo_id) AS installs,
-            ARRAY_AGG(DISTINCT device.operating_system IGNORE NULLS) AS os_types,
-            ARRAY_AGG(DISTINCT geo.country IGNORE NULLS) AS countries
-        FROM
-            `mobile-app-df5c3.analytics_489350194.events_*`
-        WHERE
-            _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE("{start_date}"))
-                             AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
-            AND event_name = 'first_open'
-        GROUP BY event_date
-        ORDER BY event_date
+            DATE(event_timestamp) AS date,
+            COUNT(*) AS installs,
+            ARRAY_AGG(DISTINCT platform) AS os_types,
+            ARRAY_AGG(DISTINCT geo.country) AS countries,
+            ARRAY_AGG(DISTINCT traffic_source.source_medium.source) AS source
+        FROM `mobile-app-df5c3.analytics_489350194.events_*`
+        WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 2 DAY))
+                                AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
+          AND event_name = 'first_open'
+          AND event_timestamp >= TIMESTAMP('{start.strftime('%Y-%m-%d %H:%M:%S')}')
+        GROUP BY date
+        ORDER BY date DESC
     """
+
     result = client.query(query).to_dataframe()
-    result["source"] = "firebase"
-    result["event_date"] = pd.to_datetime(result["event_date"]).dt.date
-    return result.rename(columns={"event_date": "date"})
+    return result
 
 def upsert_daily_app_downloads(df):
     records = [

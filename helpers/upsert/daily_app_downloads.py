@@ -8,12 +8,13 @@ from helpers.connection import get_cache_db_connection
 # Set default start date to 3 days ago
 DEFAULT_START_DATE = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
 
-def fetch_daily_installs_from_bigquery(start_date=DEFAULT_START_DATE) -> pd.DataFrame:
+def fetch_daily_installs_from_bigquery(days: int = 3) -> pd.DataFrame:
     client = bigquery.Client()
+    start_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
 
     query = f"""
         SELECT
-            event_date,
+            DATE(TIMESTAMP_MICROS(event_timestamp)) AS date,
             COUNT(DISTINCT user_pseudo_id) AS installs,
             ARRAY_AGG(DISTINCT device.operating_system IGNORE NULLS) AS os_types,
             ARRAY_AGG(DISTINCT geo.country IGNORE NULLS) AS countries
@@ -23,14 +24,15 @@ def fetch_daily_installs_from_bigquery(start_date=DEFAULT_START_DATE) -> pd.Data
             _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE("{start_date}"))
                              AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
             AND event_name = 'first_open'
-        GROUP BY event_date
-        ORDER BY event_date
+            AND DATE(TIMESTAMP_MICROS(event_timestamp)) >= DATE("{start_date}")
+        GROUP BY date
+        ORDER BY date
     """
 
     result = client.query(query).to_dataframe()
     result["source"] = "firebase"
-    result["event_date"] = pd.to_datetime(result["event_date"]).dt.date
-    return result.rename(columns={"event_date": "date"})
+    result["date"] = pd.to_datetime(result["date"]).dt.date
+    return result
 
 def upsert_daily_app_downloads(df, conn=None):
     if df.empty:

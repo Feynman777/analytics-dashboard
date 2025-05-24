@@ -1,0 +1,34 @@
+name: 📲 App Downloads Sync
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # every hour, at minute 0 (UTC)
+  workflow_dispatch:
+
+jobs:
+  sync_apps:
+    runs-on: ubuntu-latest
+    env:
+      GOOGLE_APPLICATION_CREDENTIALS: /tmp/firebase-bq-key.json
+
+    steps:
+      - name: 📥 Checkout repo
+        uses: actions/checkout@v3
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: 🔐 Decode BQ service key
+        env:
+          BQ_KEY_BASE64: ${{ secrets.BQ_KEY_BASE64 }}
+        run: |
+          echo "$BQ_KEY_BASE64" | base64 -d > /tmp/firebase-bq-key.json
+
+      - name: 🚀 Run cron_sync_apps.py
+        run: python cron_sync_apps.py

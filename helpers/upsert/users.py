@@ -1,9 +1,9 @@
-import pandas as pd
 from datetime import datetime, timedelta
+import pandas as pd
 from psycopg2.extras import execute_values
 from helpers.connection import get_main_db_connection, get_cache_db_connection
 
-def insert_users_table():
+def upsert_users():
     today = datetime.utcnow().date()
     two_days_ago = today - timedelta(days=2)
 
@@ -65,5 +65,3 @@ def insert_users_table():
         print(f"✅ Upserted {len(users_df)} users into users table.")
     else:
         print("⚠️ No users to upsert.")
-
-

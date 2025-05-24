@@ -49,6 +49,9 @@ def upsert_daily_app_downloads(df, conn=None):
         )
         for _, row in df.iterrows()
     ]
+    print("📝 Attempting to upsert the following rows:")
+    for row in records:
+        print(row)
 
     insert_query = """
         INSERT INTO daily_app_downloads (date, installs, os_types, countries, source)

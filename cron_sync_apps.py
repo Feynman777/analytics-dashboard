@@ -23,6 +23,7 @@ if __name__ == "__main__":
         print("⚠️ No data returned from BigQuery.")
     else:
         print(f"📊 Retrieved {len(df)} rows from BigQuery.")
+        print(df.to_string(index=False))  # 👈 shows full rows
         with get_direct_cache_connection() as conn:
             upsert_daily_app_downloads(df, conn=conn)
 

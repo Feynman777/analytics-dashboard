@@ -1,20 +1,18 @@
 import os
 
-try:
-    from streamlit import secrets
-except ImportError:
-    secrets = None
-
 def get_env_or_secret(key, section=None, default=None):
-    # Prefer env variable first (with section prefix if applicable)
-    env_key = f"{section.upper()}_{key}" if section else key
-    if os.getenv(env_key):
-        return os.getenv(env_key)
+    # 1. Check environment variable
+    if os.getenv(key):
+        return os.getenv(key)
 
-    # Fall back to streamlit secrets (if running in Streamlit)
-    if secrets:
+    # 2. Check Streamlit secrets only if inside Streamlit
+    try:
+        import streamlit as st
         if section:
-            return secrets.get(section, {}).get(key, default)
-        return secrets.get(key, default)
+            return st.secrets.get(section, {}).get(key, default)
+        return st.secrets.get(key, default)
+    except (ImportError, AttributeError):
+        pass
 
+    # 3. Fallback default
     return default

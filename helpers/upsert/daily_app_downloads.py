@@ -51,7 +51,7 @@ def upsert_daily_app_downloads(df, conn=None):
     insert_query = """
         INSERT INTO daily_app_downloads (date, installs, os_types, countries, source)
         VALUES %s
-        ON CONFLICT (date, source) DO UPDATE
+        ON CONFLICT ("date") DO UPDATE
         SET installs = EXCLUDED.installs,
             os_types = EXCLUDED.os_types,
             countries = EXCLUDED.countries,

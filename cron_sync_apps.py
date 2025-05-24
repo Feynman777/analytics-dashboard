@@ -1,13 +1,27 @@
 # === cron_sync_apps.py ===
 import os
-from helpers.upsert.daily_app_downloads import sync_daily_app_downloads
+import base64
+import pandas as pd
+from helpers.upsert.daily_app_downloads import upsert_daily_app_downloads
+from helpers.upsert.daily_app_downloads import fetch_daily_installs_from_bigquery
+from helpers.connection_direct import get_direct_cache_connection  # 👈 use direct method
+
+# Decode BQ service account key
+if "BQ_KEY_BASE64" in os.environ:
+    key_path = "/tmp/firebase-bq-key.json"
+    with open(key_path, "wb") as f:
+        f.write(base64.b64decode(os.environ["BQ_KEY_BASE64"]))
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
 
 if __name__ == "__main__":
-    print("🚀 Running App Download Sync script")
-    print("🔍 GOOGLE_APPLICATION_CREDENTIALS =", os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+    print("✅ Starting cron_sync_apps.py...")
+    print("🔐 GOOGLE_APPLICATION_CREDENTIALS =", os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
 
-    if not os.path.exists(os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")):
-        print("❌ Credential file not found. Exiting.")
-        exit(1)
+    df = fetch_daily_installs_from_bigquery(start="2025-05-20")
+    if df.empty:
+        print("⚠️ No data returned from BigQuery.")
+    else:
+        print(f"📊 Retrieved {len(df)} rows from BigQuery.")
+        with get_direct_cache_connection() as conn:
+            upsert_daily_app_downloads(df, conn=conn)
 
-    sync_daily_app_downloads(start="2025-05-20")

@@ -9,6 +9,7 @@ def upsert_users():
 
     print(f"\n🔁 Fetching users created or active since {two_days_ago}...")
 
+    # === Fetch users created in the last 2 days ===
     query = """
         SELECT "userId", username, "createdAt"
         FROM "User"
@@ -21,6 +22,7 @@ def upsert_users():
         print("⚠️ No recently created users found.")
         return
 
+    # === Fetch active users in the last 2 days ===
     print("🔍 Fetching first active dates from recent transactions...")
     query = """
         SELECT from_user AS username, MIN(created_at) AS first_active_at
@@ -31,15 +33,18 @@ def upsert_users():
     with get_cache_db_connection() as conn:
         active_df = pd.read_sql(query, conn, params=(two_days_ago,))
 
+    # === Merge and clean ===
     print("🔗 Merging...")
     users_df = users_df.merge(active_df, on="username", how="left")
     users_df["createdAt"] = pd.to_datetime(users_df["createdAt"], errors="coerce")
     users_df["first_active_at"] = pd.to_datetime(users_df["first_active_at"], errors="coerce")
-    users_df["createdAt"] = users_df["createdAt"].apply(lambda x: x if pd.notnull(x) else None)
-    users_df["first_active_at"] = users_df["first_active_at"].apply(lambda x: x if pd.notnull(x) else None)
+
+    users_df["createdAt"] = users_df["createdAt"].astype(object).where(pd.notnull(users_df["createdAt"]), None)
+    users_df["first_active_at"] = users_df["first_active_at"].astype(object).where(pd.notnull(users_df["first_active_at"]), None)
 
     print(f"📊 Prepared {len(users_df)} users for upsert.")
 
+    # === Upsert ===
     if not users_df.empty:
         with get_cache_db_connection() as conn:
             with conn.cursor() as cur:

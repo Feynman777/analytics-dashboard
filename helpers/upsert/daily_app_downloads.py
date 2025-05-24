@@ -32,35 +32,42 @@ def fetch_daily_installs_from_bigquery(start_date=DEFAULT_START_DATE) -> pd.Data
     result["event_date"] = pd.to_datetime(result["event_date"]).dt.date
     return result.rename(columns={"event_date": "date"})
 
-def upsert_daily_app_downloads(df):
+def upsert_daily_app_downloads(df, conn=None):
+    if df.empty:
+        print("⚠️ No installs to upsert.")
+        return
+
     records = [
-    (
-        row["date"],
-        int(row["installs"]),
-        list(row["os_types"]),
-        list(row["countries"]),
-        row["source"]
-    )
-    for _, row in df.iterrows()
-]
+        (
+            row["date"],
+            int(row["installs"]),
+            list(row["os_types"]),
+            list(row["countries"]),
+            row["source"]
+        )
+        for _, row in df.iterrows()
+    ]
+
     insert_query = """
         INSERT INTO daily_app_downloads (date, installs, os_types, countries, source)
         VALUES %s
-        ON CONFLICT (date) DO UPDATE
+        ON CONFLICT (date, source) DO UPDATE
         SET installs = EXCLUDED.installs,
             os_types = EXCLUDED.os_types,
             countries = EXCLUDED.countries,
             source = EXCLUDED.source;
     """
-    with get_cache_db_connection() as conn:
-        with conn.cursor() as cur:
-            execute_values(cur, insert_query, records)
-        conn.commit()
 
-def sync_daily_app_downloads(start="2025-05-20"):
-    df = fetch_daily_installs_from_bigquery(start)
-    if not df.empty:
-        upsert_daily_app_downloads(df)
-        print(f"✅ Synced {len(df)} rows into daily_app_downloads")
+    use_conn = conn or get_cache_db_connection()
+
+    if conn:
+        # Assume external caller manages commit + close
+        with use_conn.cursor() as cur:
+            execute_values(cur, insert_query, records)
     else:
-        print("ℹ️ No new data to sync.")
+        with use_conn:
+            with use_conn.cursor() as cur:
+                execute_values(cur, insert_query, records)
+            use_conn.commit()
+
+    print(f"✅ Upserted {len(records)} rows into daily_app_downloads.")

@@ -18,7 +18,7 @@ def fetch_daily_installs_from_bigquery(start: datetime = None) -> pd.DataFrame:
             ARRAY_AGG(DISTINCT geo.country) AS countries,
             ARRAY_AGG(DISTINCT traffic_source.source) AS sources
         FROM `mobile-app-df5c3.analytics_489350194.events_*`
-        WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 2 DAY))
+        WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY))
                                 AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
           AND event_name = 'first_open'
           AND TIMESTAMP_MICROS(event_timestamp) >= TIMESTAMP('{start.strftime('%Y-%m-%d %H:%M:%S')}')

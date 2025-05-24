@@ -10,7 +10,8 @@ def upsert_daily_stats(start: datetime, end: datetime = None, conn=None):
 
     # === Load user data for new users and new active users ===
     all_users_df = fetch_all_users()
-    all_users_df["created_at"] = pd.to_datetime(all_users_df["created_at"]).dt.date
+    if "created_at" in all_users_df.columns:
+        all_users_df["created_at"] = pd.to_datetime(all_users_df["created_at"], errors="coerce").dt.date
     user_creation_map = dict(zip(all_users_df["user_id"], all_users_df["created_at"]))
 
     # === Load raw transactions ===
@@ -58,7 +59,6 @@ def upsert_daily_stats(start: datetime, end: datetime = None, conn=None):
             "revenue": group["fee_usd"].sum(),
         }
 
-        # Optional: fetch referral/agent metrics via API
         for field, endpoint in {
             "referrals": "user/referrals",
             "agents_deployed": "agents/deployed",
@@ -76,7 +76,6 @@ def upsert_daily_stats(start: datetime, end: datetime = None, conn=None):
         print("✅ No daily stats to upsert.")
         return
 
-    # === Upsert into daily_stats ===
     with conn.cursor() as cur:
         execute_values(cur, """
             INSERT INTO daily_stats (

@@ -2,19 +2,23 @@ import os
 
 try:
     import streamlit as st
+    HAS_STREAMLIT = True
 except ImportError:
-    st = None
+    HAS_STREAMLIT = False
 
 def get_env_or_secret(key, section=None, default=None):
-    # Try environment variable first
-    if os.getenv(key):
-        return os.getenv(key)
+    # Try environment variable first (GitHub Actions and local testing)
+    if key in os.environ:
+        return os.environ[key]
 
-    # Then try Streamlit secrets
-    if st and hasattr(st, "secrets"):
-        if section:
-            return st.secrets.get(section, {}).get(key, default)
-        return st.secrets.get(key, default)
+    # Try Streamlit secrets (Streamlit Cloud runtime)
+    if HAS_STREAMLIT and hasattr(st, "secrets"):
+        try:
+            if section:
+                return st.secrets.get(section, {}).get(key, default)
+            return st.secrets.get(key, default)
+        except Exception:
+            pass
 
-    # Fallback to provided default
+    # Fallback to default
     return default

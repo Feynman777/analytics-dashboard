@@ -6,9 +6,9 @@ import os
 from helpers.sync.transactions import sync_transaction_cache
 from helpers.sync.daily_stats import sync_daily_stats
 from helpers.sync.fees import sync_fee_series
-from helpers.sync.weekly_data import sync_weekly_data
-from helpers.sync.weekly_data import sync_weekly_avg_revenue_metrics
-from helpers.upsert.weekly_stats import upsert_weekly_swap_revenue  # ✅ NEW
+from helpers.sync.weekly_data import sync_weekly_data, sync_weekly_avg_revenue_metrics
+from helpers.upsert.weekly_stats import upsert_weekly_swap_revenue
+from helpers.upsert.users import upsert_users
 from helpers.connection import get_main_db_connection, get_cache_db_connection
 
 # === Start log ===
@@ -51,5 +51,12 @@ try:
     print("✅ Finished syncing weekly avg revenue metrics")
 except Exception as e:
     print("❌ Error syncing weekly avg revenue metrics:", e)
+
+# === Sync users table ===
+try:
+    upsert_users()
+    print("✅ Finished syncing users table")
+except Exception as e:
+    print("❌ Error syncing users table:", e)
 
 print("🎉 Cron sync completed at:", datetime.utcnow())

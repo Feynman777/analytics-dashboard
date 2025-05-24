@@ -1,12 +1,17 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from helpers.connection import get_cache_db_connection
 from helpers.fetch.user import fetch_top_users_by_metric
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 # === SETUP ===
 st.set_page_config(page_title="User Data", layout="wide")
+
+# Detect theme
+theme_base = st.get_option("theme.base")
+is_dark_mode = theme_base == "dark"
+grid_theme = "material-dark" if is_dark_mode else "streamlit"
 
 LEADERBOARD_TYPES = {
     "Swap Volume": "swap",
@@ -82,11 +87,13 @@ with col_left:
         st.session_state.custom_date_range = None
 
 # === COMPUTE DATE FILTER ===
-now = datetime.utcnow().date()
+now = datetime.utcnow()
 start_date = end_date = None
 
 if date_selection == "Custom" and st.session_state.custom_date_range:
-    start_date, end_date = st.session_state.custom_date_range
+    start, end = st.session_state.custom_date_range
+    start_date = datetime.combine(start, time.min)
+    end_date = datetime.combine(end, time.max)
 elif date_selection != "Custom" and DATE_OPTIONS[date_selection] is not None:
     end_date = now
     start_date = now - DATE_OPTIONS[date_selection]
@@ -135,7 +142,7 @@ with col_right:
             if "Volume" in col:
                 df[col] = df[col].map("{:,.2f}".format)
 
-        # Custom CSS for header left alignment
+        # Align header left
         st.markdown("""
             <style>
             .ag-header-cell-label {
@@ -145,7 +152,7 @@ with col_right:
             </style>
         """, unsafe_allow_html=True)
 
-        # Configure AgGrid with left-aligned columns and filters
+        # Configure AgGrid
         gb = GridOptionsBuilder.from_dataframe(df)
         gb.configure_default_column(
             headerClass="left-align-header",
@@ -155,7 +162,6 @@ with col_right:
             filter=True
         )
 
-        # Enable filtering on key columns
         if "Username" in df.columns:
             gb.configure_column("Username", filter="agTextColumnFilter")
         for col in df.columns:
@@ -168,7 +174,7 @@ with col_right:
             df,
             gridOptions=grid_options,
             height=950,
-            theme="balham",
+            theme=grid_theme,
             allow_unsafe_jscode=True,
             update_mode=GridUpdateMode.NO_UPDATE,
             fit_columns_on_grid_load=True

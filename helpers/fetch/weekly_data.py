@@ -1,6 +1,6 @@
 # === helpers/fetch/weekly_data.py ===
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from helpers.connection import get_cache_db_connection
 import pandas as pd
@@ -81,3 +81,37 @@ def fetch_weekly_swap_revenue(conn) -> pd.DataFrame:
             for row in rows
         ])
 
+def fetch_weekly_avg_revenue_metrics(start):
+    """
+    Aggregates revenue and active user metrics from `avg_revenue_metrics` table
+    for the full week starting on `start` (a Monday).
+    Returns a single-row DataFrame for upsert.
+    """
+    if isinstance(start, pd.Timestamp):
+        start = start.to_pydatetime().date()
+
+    if hasattr(start, "date"):  # In case it's accidentally a datetime
+        start = start.date()
+
+    end = start + timedelta(days=7)
+
+    with get_cache_db_connection() as conn:
+        df = pd.read_sql("""
+            SELECT date, total_fees, active_users
+            FROM avg_revenue_metrics
+            WHERE date >= %s AND date < %s
+        """, conn, params=(start, end))
+
+    if df.empty:
+        return pd.DataFrame()
+
+    total_fees = df["total_fees"].sum()
+    total_active_users = df["active_users"].sum()
+    avg_rev_per_active_user = total_fees / total_active_users if total_active_users else 0
+
+    return pd.DataFrame([{
+        "week": start,
+        "total_fees": total_fees,
+        "active_users": total_active_users,
+        "avg_rev_per_active_user": avg_rev_per_active_user
+    }])

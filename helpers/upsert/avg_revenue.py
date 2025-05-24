@@ -37,13 +37,22 @@ def upsert_avg_revenue_metrics(df: pd.DataFrame):
         conn.commit()
         print(f"✅ Upserted {len(df)} avg revenue metric rows.")
 
+import pandas as pd
+from psycopg2.extras import execute_values
+from helpers.connection import get_cache_db_connection
+
 def upsert_weekly_avg_revenue_metrics(df: pd.DataFrame):
     """
     Upserts weekly average revenue metrics into weekly_avg_revenue_metrics table.
     Expected columns: week, total_fees, active_users, avg_rev_per_active_user
     """
-    if df.empty:
-        print("⚠️ No weekly avg revenue metrics to upsert.")
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        print("⚠️ No weekly avg revenue metrics to upsert or invalid DataFrame.")
+        return
+
+    required_cols = {"week", "total_fees", "active_users", "avg_rev_per_active_user"}
+    if not required_cols.issubset(df.columns):
+        print(f"❌ DataFrame is missing required columns: {required_cols - set(df.columns)}")
         return
 
     with get_cache_db_connection() as conn:
@@ -59,10 +68,11 @@ def upsert_weekly_avg_revenue_metrics(df: pd.DataFrame):
             """, [
                 (
                     row["week"],
-                    row["total_fees"],
-                    row["active_users"],
-                    row["avg_rev_per_active_user"]
+                    float(row["total_fees"]),
+                    int(row["active_users"]),
+                    float(row["avg_rev_per_active_user"])
                 ) for _, row in df.iterrows()
             ])
         conn.commit()
-        print(f"✅ Upserted {len(df)} weekly avg revenue metric rows.")
+
+    print(f"✅ Upserted {len(df)} rows into weekly_avg_revenue_metrics.")

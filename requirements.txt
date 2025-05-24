@@ -6,4 +6,7 @@ requests>=2.31.0
 tqdm>=4.66.2
 plotly>=5.0.0
 python-dotenv>=1.0.1
-
+google-cloud-bigquery>=3.11.4
+google-auth>=2.22.0
+pandas>=2.0.0
+db-dtypes>=1.0.0

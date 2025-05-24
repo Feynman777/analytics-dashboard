@@ -139,21 +139,27 @@ txn_data = fetch_transactions_filtered(
     limit=1000,
 )
 
-columns = [
-    "Date", "Type", "Status", "From User", "To User", "From Token",
-    "From Chain", "To Token", "To Chain", "Amount USD", "Tx Hash", "Tx Display"
-]
+df = pd.DataFrame(txn_data)
 
-# === Build DataFrame from transaction data ===
-if isinstance(txn_data, list) and txn_data and len(txn_data[0]) == len(columns):
-    df = pd.DataFrame(txn_data, columns=columns)
-else:
-    df = pd.DataFrame(txn_data)
+# Drop duplicated column names
+df = df.loc[:, ~df.columns.duplicated()]
 
-if "Tx Display" not in df.columns:
-    df["Tx Display"] = ""
-else:
-    df["Tx Display"] = df["Tx Display"].fillna("")
+# Rename to clean headers if needed
+column_rename_map = {
+    "created_at": "Date",
+    "type": "Type",
+    "status": "Status",
+    "from_user": "From User",
+    "to_user": "To User",
+    "from_token": "From Token",
+    "from_chain": "From Chain",
+    "to_token": "To Token",
+    "to_chain": "To Chain",
+    "amount_usd": "Amount USD",
+    "tx_hash": "Tx Hash",
+    "tx_display": "Tx Display"
+}
+df = df.rename(columns=column_rename_map)
 
 # === Display Transactions Table ===
 st.subheader("📋 Transactions Table")
@@ -171,6 +177,10 @@ gb.configure_column("From Chain", filter="agSetColumnFilter")
 gb.configure_column("To Token", filter="agTextColumnFilter")
 gb.configure_column("To Chain", filter="agSetColumnFilter")
 gb.configure_column("Amount USD", filter="agNumberColumnFilter")
+
+# Auto-resize all columns on first render
+gb.configure_grid_options(domLayout='normal', onFirstDataRendered="function(params) { params.api.sizeColumnsToFit(); }")
+
 gb.configure_selection(selection_mode="single", use_checkbox=True)
 grid_options = gb.build()
 
@@ -179,7 +189,7 @@ AgGrid(
     gridOptions=grid_options,
     update_mode=GridUpdateMode.MODEL_CHANGED,
     theme="balham",
-    height=600,
+    height=800,
     fit_columns_on_grid_load=True,
     enable_enterprise_modules=True,
     allow_unsafe_jscode=True

@@ -72,7 +72,7 @@ def fetch_user_txn_timeseries(username: str) -> pd.DataFrame:
 
 def fetch_all_users() -> pd.DataFrame:
     query = """
-        SELECT "userId", username, created_at
+        SELECT "userId", username, "createdAt"
         FROM "User"
         WHERE username IS NOT NULL
     """

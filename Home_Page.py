@@ -1,6 +1,7 @@
 import streamlit as st
 from helpers.connection import get_main_db_connection, get_cache_db_connection
 from helpers.fetch.home import fetch_home_stats
+from helpers.fetch.cash_yield import fetch_cash_yield_metrics  # 🔄 New helper
 
 # === Load Data ===
 conn_main = get_main_db_connection()
@@ -9,6 +10,10 @@ stats = fetch_home_stats(conn_main, conn_cache)
 conn_main.close()
 conn_cache.close()
 
+# === Load Cash Yield (from external API)
+lifetime_yield, yield_24h = fetch_cash_yield_metrics()
+stats["24h"]["cash_yield"] = yield_24h
+stats["lifetime"]["cash_yield"] = lifetime_yield
 
 # === Metric Display Helper ===
 def show_metric(col, label, value, prefix="", decimals=2):
@@ -16,7 +21,6 @@ def show_metric(col, label, value, prefix="", decimals=2):
         formatted = f"{prefix}{value:,.{decimals}f}"
     else:
         formatted = f"{int(value):,}"
-
     col.markdown(f"""
         <div style="line-height: 1.2; margin-bottom: 12px;">
             <div style="font-size: 1.5rem; font-weight: 600; color: inherit;">{label}</div>
@@ -24,7 +28,7 @@ def show_metric(col, label, value, prefix="", decimals=2):
         </div>
     """, unsafe_allow_html=True)
 
-# === Clean Section Card ===
+# === Section Card Helper ===
 def section_card_manual(title, rows, color="transparent"):
     st.markdown(f"""
         <div style="
@@ -57,8 +61,7 @@ st.set_page_config(page_title="Home Dashboard", layout="wide")
 st.title("Home Dashboard")
 
 # === CRYPTO ROW ===
-crypto_col1, spacer, crypto_col2 = st.columns([1, 0.1, 1])
-
+crypto_col1, _, crypto_col2 = st.columns([1, 0.1, 1])
 with crypto_col1:
     section_card_manual("Crypto — Last 24h", [[
         ("Swap Volume", stats["24h"].get("swap_volume", 0), {"prefix": "$"}),
@@ -66,7 +69,6 @@ with crypto_col1:
         ("Swap Txns", stats["24h"].get("swap_transactions", 0), {"decimals": 0}),
         ("Send Txns", stats["24h"].get("send_transactions", 0), {"decimals": 0}),
     ]])
-
 with crypto_col2:
     section_card_manual("Crypto — Lifetime", [[
         ("Swap Volume", stats["lifetime"].get("swap_volume", 0), {"prefix": "$"}),
@@ -78,15 +80,13 @@ with crypto_col2:
 st.markdown("<div style='height: 40px'></div>", unsafe_allow_html=True)
 
 # === CASH ROW ===
-cash_col1, spacer, cash_col2 = st.columns([1, 0.1, 1])
-
+cash_col1, _, cash_col2 = st.columns([1, 0.1, 1])
 with cash_col1:
     section_card_manual("Cash — Last 24h", [[
         ("Cash Txns", stats["24h"].get("cash_transactions", 0), {"decimals": 0}),
         ("Cash Volume", stats["24h"].get("cash_volume", 0), {"prefix": "$"}),
         ("Cash Yield", stats["24h"].get("cash_yield", 0), {"prefix": "$"}),
     ]])
-
 with cash_col2:
     section_card_manual("Cash — Lifetime", [[
         ("Cash Txns", stats["lifetime"].get("cash_transactions", 0), {"decimals": 0}),
@@ -97,15 +97,13 @@ with cash_col2:
 st.markdown("<div style='height: 40px'></div>", unsafe_allow_html=True)
 
 # === USERS ROW ===
-user_col1, spacer, user_col2 = st.columns([1, 0.1, 1])
-
+user_col1, _, user_col2 = st.columns([1, 0.1, 1])
 with user_col1:
     section_card_manual("Users — Last 24h", [[
         ("Active Users", stats["24h"].get("active_users", 0), {"decimals": 0}),
         ("New Active Users", stats["24h"].get("new_active_users", 0), {"decimals": 0}),
         ("New Users", stats["24h"].get("new_users", 0), {"decimals": 0}),
     ]])
-
 with user_col2:
     section_card_manual("Users — Lifetime", [[
         ("Active Users", stats["lifetime"].get("active_users", 0), {"decimals": 0}),

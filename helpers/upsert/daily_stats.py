@@ -106,12 +106,12 @@ def upsert_daily_stats(start: datetime, end: datetime = None, conn=None):
         """, [
             (
                 r["date"], r["chain_name"],
-                r["swap_transactions"], r["swap_volume"], r["swap_revenue"],
-                r["send_transactions"], r["send_volume"],
-                r["cash_transactions"], r["cash_volume"], r["cash_revenue"],
-                r["dapp_connections"], r["referrals"], r["agents_deployed"],
-                r["active_users"], r["new_users"], r["new_active_users"],
-                r["revenue"]
+                int(r["swap_transactions"]), float(r["swap_volume"]), float(r["swap_revenue"]),
+                int(r["send_transactions"]), float(r["send_volume"]),
+                int(r["cash_transactions"]), float(r["cash_volume"]), float(r["cash_revenue"]),
+                int(r["dapp_connections"]), int(r["referrals"]), int(r["agents_deployed"]),
+                int(r["active_users"]), int(r["new_users"]), int(r["new_active_users"]),
+                float(r["revenue"])
             ) for r in stats
         ])
         conn.commit()

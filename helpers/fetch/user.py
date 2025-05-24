@@ -80,8 +80,9 @@ def fetch_all_users() -> pd.DataFrame:
     with get_main_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query)
-            return pd.DataFrame(cur.fetchall())
-
+            df = pd.DataFrame(cur.fetchall())
+            df.rename(columns={"userId": "user_id", "createdAt": "created_at"}, inplace=True)
+            return df
 
 def fetch_top_users_last_7d(conn, limit=25):
     query = """

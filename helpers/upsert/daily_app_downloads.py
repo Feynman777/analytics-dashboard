@@ -10,9 +10,11 @@ def fetch_daily_installs_from_bigquery(start: datetime = None) -> pd.DataFrame:
     if not start:
         start = datetime.utcnow() - timedelta(days=1)
 
+    start_str = start.strftime('%Y-%m-%d %H:%M:%S')
+
     query = f"""
         SELECT
-            DATE(event_timestamp) AS date,
+            DATE(TIMESTAMP_MICROS(event_timestamp)) AS date,
             COUNT(*) AS installs,
             ARRAY_AGG(DISTINCT platform) AS os_types,
             ARRAY_AGG(DISTINCT geo.country) AS countries,
@@ -21,7 +23,7 @@ def fetch_daily_installs_from_bigquery(start: datetime = None) -> pd.DataFrame:
         WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 2 DAY))
                                 AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
           AND event_name = 'first_open'
-          AND event_timestamp >= TIMESTAMP('{start.strftime('%Y-%m-%d %H:%M:%S')}')
+          AND TIMESTAMP_MICROS(event_timestamp) >= TIMESTAMP('{start_str}')
         GROUP BY date
         ORDER BY date DESC
     """

@@ -38,7 +38,9 @@ def upsert_users():
     users_df = users_df.merge(active_df, on="username", how="left")
     users_df["createdAt"] = pd.to_datetime(users_df["createdAt"], errors="coerce")
     users_df["first_active_at"] = pd.to_datetime(users_df["first_active_at"], errors="coerce")
-    users_df = users_df.where(pd.notnull(users_df), None)
+    users_df = users_df.fillna(value={"createdAt": None, "first_active_at": None})
+    users_df["createdAt"] = users_df["createdAt"].apply(lambda x: x if pd.notnull(x) else None)
+    users_df["first_active_at"] = users_df["first_active_at"].apply(lambda x: x if pd.notnull(x) else None)
 
     print(f"📊 Prepared {len(users_df)} users for upsert.")
 

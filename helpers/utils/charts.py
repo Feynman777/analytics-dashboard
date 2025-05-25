@@ -1,5 +1,6 @@
 #helpers/utils/charts.py
 import altair as alt
+import pandas as pd
 import streamlit as st
 
 def render_badge(change):
@@ -99,6 +100,29 @@ def user_volume_chart(df):
         height=400,
         title="📈 Daily Volume (USD)"
     ).interactive()
+
+def total_balance_chart(data: list[dict]):
+    if not data:
+        st.info("No balance data available yet.")
+        return
+
+    df = pd.DataFrame(data)
+    df["date"] = pd.to_datetime(df["date"])
+    df["total_balance_usd"] = pd.to_numeric(df["total_balance_usd"], errors="coerce")
+
+    if df.empty:
+        st.info("No valid balance data.")
+        return
+
+    chart = alt.Chart(df).mark_line(point=True).encode(
+        x=alt.X("date:T", title="Date", axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("total_balance_usd:Q", title="Total Balance (USD)"),
+        tooltip=["date:T", "total_balance_usd:Q"]
+    ).properties(
+        height=300
+    )
+
+    st.altair_chart(chart, use_container_width=True)
 
 def user_txn_detail_chart(df, username):
     return alt.Chart(df).mark_line(point=True).encode(

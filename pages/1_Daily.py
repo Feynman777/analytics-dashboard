@@ -4,9 +4,10 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from helpers.connection import get_cache_db_connection
-from helpers.fetch.daily import fetch_daily_stats
+from helpers.fetch.daily import fetch_daily_stats, fetch_total_balances
 from helpers.utils.charts import daily_metric_section
 from helpers.fetch.app_data import fetch_daily_app_downloads
+from helpers.utils.charts import total_balance_chart
 import altair as alt
 
 # === CONFIG ===
@@ -111,3 +112,14 @@ with col_left:
 with col_right:
     total_downloads = int(df_apps["installs"].sum())
     st.metric(label="📈 Total Downloads", value=f"{total_downloads:,}")
+
+st.subheader("💰 Total Balance Over Time")
+
+balance_df = pd.DataFrame(fetch_total_balances())
+balance_df["date"] = pd.to_datetime(balance_df["date"])
+balance_df["total_balance_usd"] = pd.to_numeric(balance_df["total_balance_usd"], errors="coerce")
+filtered_df = balance_df[(balance_df["date"] >= pd.Timestamp(start_date)) & (balance_df["date"] <= pd.Timestamp(end_date))]
+
+col_left, _ = st.columns(2)
+with col_left:
+    st.line_chart(filtered_df.set_index("date")["total_balance_usd"])

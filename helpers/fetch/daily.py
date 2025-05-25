@@ -64,3 +64,13 @@ def fetch_daily_user_stats(start=None, end=None):
             ])
             df["date"] = pd.to_datetime(df["date"])
             return df
+        
+def fetch_total_balances():
+    with get_cache_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT date, total_balance_usd
+                FROM daily_total_balances
+                ORDER BY date ASC
+            """)
+            return cur.fetchall()

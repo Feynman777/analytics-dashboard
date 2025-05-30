@@ -94,25 +94,6 @@ with col9:
 with col10:
     st.altair_chart(daily_metric_section(daily, "New Active Users", "Users", col="new_active_users"), use_container_width=True)
 
-# === App Downloads: Chart + Total ===
-st.subheader("📲 App Downloads")
-col_left, col_right = st.columns(2)
-
-with col_left:
-    chart = alt.Chart(df_apps).mark_bar().encode(
-        x="date:T",
-        y="installs:Q",
-        tooltip=["date:T", "installs:Q", "os_types", "countries", "source"]
-    ).properties(
-        title="Daily App Downloads",
-        height=300
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-with col_right:
-    total_downloads = int(df_apps["installs"].sum())
-    st.metric(label="📈 Total Downloads", value=f"{total_downloads:,}")
-
 st.subheader("💰 Total Balance Over Time")
 
 balance_df = pd.DataFrame(fetch_total_balances())

@@ -15,6 +15,11 @@ CHAIN_ID_MAP = {
     146: "sonic",
     59144: "linea",
     2741: "abstract",
-    81457: "blast"
-
+    81457: "blast",
+    25: "unknown",
+    324: "unknown",
+    1800: "unknown",
+    2741: "unknown",
+    416312: "ripple",
+    416313: "aptos"
 }

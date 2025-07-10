@@ -17,6 +17,9 @@ __pycache__/
 
 # Dev scripts
 test-scripts/
+fix_manual_user_ids.py
+insert_firebase_app_metrics.py
+insert_manual_app_metrics.py
 
 # Ignore secret key and test files
 encoded_key.txt

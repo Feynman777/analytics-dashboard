@@ -28,27 +28,27 @@ def fetch_home_stats(main_conn: connection, cache_conn: connection) -> dict:
             cursor.execute(query, tuple(params))
             rows = cursor.fetchall()
 
-        user_set = set()
-        for typ, from_user, amount_usd, fee_usd in rows:
-            user_set.add(from_user)
-            amount = float(amount_usd or 0)
-            fee = float(fee_usd or 0)
+            user_set = set()
+            for typ, from_user, amount_usd, fee_usd in rows:
+                user_set.add(from_user)
+                amount = float(amount_usd or 0)
+                fee = float(fee_usd or 0)
 
-            if typ == "SWAP":
-                results[scope]["swap_volume"] += amount
-                results[scope]["swap_transactions"] += 1
-                results[scope]["swap_revenue"] += fee
-            elif typ == "SEND":
-                results[scope]["send_transactions"] += 1
-                results[scope]["send_volume"] += amount
-            elif typ == "CASH":
-                results[scope]["cash_transactions"] += 1
-                results[scope]["cash_volume"] += amount
-                results[scope]["cash_revenue"] += fee
+                if typ == "SWAP":
+                    results[scope]["swap_volume"] += amount
+                    results[scope]["swap_transactions"] += 1
+                    results[scope]["swap_revenue"] += fee
+                elif typ == "SEND":
+                    results[scope]["send_transactions"] += 1
+                    results[scope]["send_volume"] += amount
+                elif typ == "CASH":
+                    results[scope]["cash_transactions"] += 1
+                    results[scope]["cash_volume"] += amount
+                    results[scope]["cash_revenue"] += fee
 
-            results[scope]["transactions"] += 1
+                results[scope]["transactions"] += 1
 
-        results[scope]["active_users"] = len(user_set)
+            results[scope]["active_users"] = len(user_set)
 
     # === Fetch transaction aggregates
     fetch_transactions("24h", window_start)

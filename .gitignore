@@ -26,3 +26,6 @@ encoded_key.txt
 firebase-bq-key.json
 test_*.py
 app_installs2.csv
+backend_code_export.txt
+generate-structure.ps1
+project_structure.txt

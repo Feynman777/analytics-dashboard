@@ -4,11 +4,8 @@ from helpers.fetch.home import fetch_home_stats
 from helpers.fetch.cash_yield import fetch_cash_yield_metrics  # 🔄 New helper
 
 # === Load Data ===
-conn_main = get_main_db_connection()
-conn_cache = get_cache_db_connection()
-stats = fetch_home_stats(conn_main, conn_cache)
-conn_main.close()
-conn_cache.close()
+with get_main_db_connection() as conn_main, get_cache_db_connection() as conn_cache:
+    stats = fetch_home_stats(conn_main, conn_cache)
 
 # === Load Cash Yield (from external API)
 lifetime_yield, yield_24h = fetch_cash_yield_metrics()

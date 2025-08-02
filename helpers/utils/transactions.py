@@ -132,7 +132,7 @@ def transform_activity_transaction(tx_hash, txn_raw, typ, status, created_at, us
         to_user = from_user
 
         # SUI fee format
-        sui_fee = txn.get("route", {}).get("nmFee", {})
+        sui_fee = txn.get("nmFee") or txn.get("route", {}).get("nmFee", {})
         if "amount" in sui_fee:
             try:
                 fee_amt = safe_decimal(sui_fee["amount"])

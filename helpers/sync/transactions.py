@@ -1,3 +1,5 @@
+# helpers\sync\transactions.py
+
 from datetime import datetime, timezone
 from helpers.upsert.transactions import upsert_transactions_from_activity
 from helpers.utils.sync_state import get_last_sync, update_last_sync
